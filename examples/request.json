@@ -1,0 +1,37 @@
+{
+  "version": 1,
+  "title": "Release decision",
+  "message": "Please review the release notes before you answer.",
+  "questions": [
+    {
+      "id": "decision",
+      "prompt": "What should we do with this release?",
+      "type": "single",
+      "required": true,
+      "options": [
+        { "value": "ship", "label": "Ship now", "description": "The release is ready." },
+        { "value": "hold", "label": "Hold", "description": "More work is needed." }
+      ],
+      "allowOther": true,
+      "placeholder": "Describe another choice"
+    },
+    {
+      "id": "risks",
+      "prompt": "Which risks need attention?",
+      "type": "multiple",
+      "options": [
+        { "value": "migration", "label": "Database migration" },
+        { "value": "support", "label": "Support readiness" }
+      ]
+    },
+    {
+      "id": "context",
+      "prompt": "What should the agent know?",
+      "type": "text",
+      "placeholder": "Add useful context"
+    }
+  ],
+  "documents": [
+    { "id": "release-notes", "title": "Release notes", "path": "release-notes.md" }
+  ]
+}

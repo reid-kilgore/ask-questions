@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Questions</title>
+    <link rel="stylesheet" href="style.css">
+  </head>
+  <body>
+    <main class="layout">
+      <section class="questions-pane" aria-labelledby="page-title">
+        <header class="page-header"><p class="eyebrow">Input needed</p><h1 id="page-title">Questions</h1><div class="asker-context"><span class="asker-label">Asked from</span><code id="asker-path" class="asker-path"></code><span id="asker-tmux-window" class="asker-tmux-window" hidden></span></div><div id="message" class="message" hidden></div></header>
+        <form id="question-form" novalidate>
+          <div class="view-toolbar" role="group" aria-label="Question view">
+            <span class="view-label">View</span>
+            <button type="button" id="all-questions" class="view-button active" aria-pressed="true">All questions</button>
+            <button type="button" id="focused-question" class="view-button" aria-pressed="false">Focus mode</button>
+            <span id="focus-progress" class="focus-progress">All questions visible</span>
+            <span id="shortcut-hint" class="shortcut-hint" hidden></span>
+          </div>
+          <div id="summary" class="summary" role="alert" hidden></div>
+          <div id="questions" class="question-stage"></div>
+          <section id="review" class="review-card" aria-labelledby="review-title" hidden>
+            <p class="eyebrow">Final step</p>
+            <h2 id="review-title">Review your answers</h2>
+            <p class="review-message">Check each answer and note before you submit.</p>
+            <div id="review-summary"></div>
+            <p id="copy-status" class="copy-status" role="status" aria-live="polite" hidden></p>
+          </section>
+          <footer class="actions">
+            <button type="button" id="previous-question" class="secondary" hidden>Previous</button>
+            <button type="button" id="cancel" class="secondary">Cancel</button>
+            <button type="button" id="copy-json" class="secondary" hidden>Copy as JSON</button>
+            <button type="button" id="next-question" hidden>Next</button>
+            <button type="submit">Submit answers</button>
+          </footer>
+        </form>
+        <section id="completion" class="completion" role="status" aria-live="polite" hidden>
+          <p id="completion-title" class="completion-title"></p>
+          <p id="completion-detail">You can close this tab.</p>
+        </section>
+      </section>
+      <aside class="documents-pane" aria-label="Supporting documents"><div id="documents"></div></aside>
+    </main>
+    <script type="module" src="app.js"></script>
+  </body>
+</html>

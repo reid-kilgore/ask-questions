@@ -1,0 +1,17 @@
+{
+  "name": "ask-questions",
+  "version": "0.1.0",
+  "private": true,
+  "description": "A local blocking question form for agent workflows",
+  "type": "module",
+  "bin": {
+    "ask-questions": "./bin/ask-questions.js"
+  },
+  "scripts": {
+    "test": "node --test",
+    "check": "node --check bin/ask-questions.js && node --check lib/contract.js && node --check web/app.js"
+  },
+  "dependencies": {
+    "markdown-it": "^14.1.0"
+  }
+}
