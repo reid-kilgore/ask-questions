@@ -5,7 +5,7 @@ import { join, resolve } from 'node:path';
 import test from 'node:test';
 import { tmpdir } from 'node:os';
 import { EventEmitter } from 'node:events';
-import { lookupTmuxWindow, openBrowser } from '../bin/ask-questions.js';
+import { lookupTmuxWindow, openBrowser, sessionUrlMessage } from '../bin/ask-questions.js';
 import { validatePayload } from '../lib/contract.js';
 
 const command = ['node', resolve('bin/ask-questions.js')];
@@ -273,7 +273,7 @@ test('ding flags do not affect help output', async () => {
 
 test('ready sound starts only after the session URL is ready', async () => {
   const source = await readFile('bin/ask-questions.js', 'utf8');
-  const urlIndex = source.indexOf('process.stderr.write(`ask-questions: ${url}\\n`);');
+  const urlIndex = source.indexOf('process.stderr.write(sessionUrlMessage(url));');
   const dingIndex = source.indexOf('if (ding) playReadySound();');
   assert.ok(urlIndex >= 0);
   assert.ok(dingIndex > urlIndex);
@@ -372,6 +372,25 @@ test('reports a browser opener that a signal stopped', () => {
   openBrowser('http://127.0.0.1:1234/token/', { platform: 'darwin', env: {}, spawnFn: opener.spawnFn, write: opener.write });
   opener.child.emit('exit', null, 'SIGTERM');
   assert.match(opener.messages[0], /open stopped with signal SIGTERM/);
+});
+
+const HYPERLINK_START = '\u001b]8;;';
+const HYPERLINK_END = '\u001b\\';
+
+test('writes the session URL as a plain line when stderr is not a terminal', () => {
+  const url = 'http://127.0.0.1:1234/abc/';
+  const message = sessionUrlMessage(url, { isTty: false });
+  assert.equal(message, `ask-questions: ${url}\n`);
+  assert.ok(!message.includes('\u001b'), 'Captured logs must stay free of escape sequences.');
+});
+
+test('writes the session URL as an OSC 8 hyperlink when stderr is a terminal', () => {
+  const url = 'http://127.0.0.1:1234/abc/';
+  const message = sessionUrlMessage(url, { isTty: true });
+  const expected = `ask-questions: ${HYPERLINK_START}${url}${HYPERLINK_END}${url}${HYPERLINK_START}${HYPERLINK_END}\n`;
+  assert.equal(message, expected);
+  assert.ok(message.includes(url), 'The URL must stay readable as text.');
+  assert.ok(message.endsWith('\n'));
 });
 
 test('interface source keeps focus actions, safe review rendering, and Other input rules', async () => {

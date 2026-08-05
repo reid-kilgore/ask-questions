@@ -136,6 +136,10 @@ Browser behavior:
   Inside tmux the warning adds a hint: a tmux server that has run for a long time can stay
   attached to a graphical session that no longer exists, which makes every browser launch fail.
   Restarting the tmux server from a terminal window repairs it.
+  When stderr is a terminal, the session URL is also written as an OSC 8 hyperlink, so a
+  terminal that supports hyperlinks can open it directly. The terminal, not this command,
+  opens the page, so this route still works when the opener fails. A redirected or piped
+  stderr receives the plain URL with no escape sequences.
   The ready sound is enabled by default. It plays after the page is ready, works with --no-open,
   and never writes sound data or status to stdout. Use --no-ding to disable it.
 
@@ -265,6 +269,16 @@ export function lookupTmuxWindow({ env = process.env, execFileFn = execFile } = 
   });
 }
 
+// OSC 8 turns the session URL into a terminal hyperlink. tmux 3.4 and later forward it
+// without passthrough. A redirected stderr gets plain text so captured logs stay clean.
+const hyperlinkStart = '\u001b]8;;';
+const hyperlinkEnd = '\u001b\\';
+
+export function sessionUrlMessage(url, { isTty = process.stderr.isTTY } = {}) {
+  if (!isTty) return `ask-questions: ${url}\n`;
+  return `ask-questions: ${hyperlinkStart}${url}${hyperlinkEnd}${url}${hyperlinkStart}${hyperlinkEnd}\n`;
+}
+
 function askerMetadata(askerPath, askerTmuxWindow) {
   return { askerPath, ...(askerTmuxWindow ? { askerTmuxWindow } : {}) };
 }
@@ -310,7 +324,7 @@ async function serve(payload, documents, messageHtml, { noOpen, ding, askerPath,
   await new Promise((resolveListen, rejectListen) => { server.once('error', rejectListen); server.listen(0, '127.0.0.1', resolveListen); });
   const address = server.address();
   const url = `http://127.0.0.1:${address.port}/${token}/`;
-  process.stderr.write(`ask-questions: ${url}\n`);
+  process.stderr.write(sessionUrlMessage(url));
   if (ding) playReadySound();
   if (!noOpen) openBrowser(url);
   const interrupt = () => completeOnce({ version: 1, status: 'cancelled', ...metadata, answers: {} });
