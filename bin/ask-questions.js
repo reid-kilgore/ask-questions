@@ -131,6 +131,11 @@ Exit codes:
 Browser behavior:
   The command opens the URL with macOS open, xdg-open, or Windows start when available.
   --no-open prevents that action for automation; the URL is still printed to stderr.
+  When the opener cannot start, or when it exits with a non-zero code or a signal, the command
+  writes one warning to stderr and keeps waiting. Open the URL manually in that case.
+  Inside tmux the warning adds a hint: a tmux server that has run for a long time can stay
+  attached to a graphical session that no longer exists, which makes every browser launch fail.
+  Restarting the tmux server from a terminal window repairs it.
   The ready sound is enabled by default. It plays after the page is ready, works with --no-open,
   and never writes sound data or status to stdout. Use --no-ding to disable it.
 
@@ -211,11 +216,24 @@ async function staticFile(name) {
   return readFile(resolve(root, 'web', name));
 }
 
-function openBrowser(url) {
-  const command = process.platform === 'darwin' ? ['open', [url]] : process.platform === 'win32' ? ['cmd', ['/c', 'start', '', url]] : ['xdg-open', [url]];
-  const child = spawn(command[0], command[1], { detached: true, stdio: 'ignore' });
-  child.on('error', () => process.stderr.write('ask-questions: Could not open a browser automatically. Open the URL above.\n'));
+export function openBrowser(url, { platform = process.platform, env = process.env, spawnFn = spawn, write = (text) => process.stderr.write(text) } = {}) {
+  const command = platform === 'darwin' ? ['open', [url]] : platform === 'win32' ? ['cmd', ['/c', 'start', '', url]] : ['xdg-open', [url]];
+  const failed = (reason) => {
+    write(`ask-questions: Could not open a browser automatically (${reason}). Open the URL above.\n`);
+    if (env.TMUX) {
+      write('ask-questions: This command is running inside tmux. A tmux server that has run for a long time can stay attached to a graphical session that no longer exists. Every browser launch from it then fails. Restart the tmux server from a terminal window to repair this.\n');
+    }
+  };
+  const child = spawnFn(command[0], command[1], { detached: true, stdio: 'ignore' });
+  let reported = false;
+  const reportOnce = (reason) => { if (!reported) { reported = true; failed(reason); } };
+  child.on('error', (error) => reportOnce(error.message));
+  child.on('exit', (code, signal) => {
+    if (signal) reportOnce(`${command[0]} stopped with signal ${signal}`);
+    else if (code !== 0) reportOnce(`${command[0]} exited with code ${code}`);
+  });
   child.unref();
+  return child;
 }
 
 function playReadySound() {

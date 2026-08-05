@@ -4,7 +4,8 @@ import { mkdtemp, readFile, realpath, rm, symlink } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import test from 'node:test';
 import { tmpdir } from 'node:os';
-import { lookupTmuxWindow } from '../bin/ask-questions.js';
+import { EventEmitter } from 'node:events';
+import { lookupTmuxWindow, openBrowser } from '../bin/ask-questions.js';
 import { validatePayload } from '../lib/contract.js';
 
 const command = ['node', resolve('bin/ask-questions.js')];
@@ -311,6 +312,66 @@ test('silently ignores unavailable tmux information', async () => {
     execFileFn: (_file, _args, _options, callback) => callback(new Error('no server'), '', ''),
   });
   assert.equal(windowName, undefined);
+});
+
+function fakeOpener() {
+  const child = new EventEmitter();
+  child.unref = () => {};
+  const calls = [];
+  const messages = [];
+  return {
+    child,
+    calls,
+    messages,
+    spawnFn: (file, args, options) => { calls.push({ file, args, options }); return child; },
+    write: (text) => { messages.push(text); },
+  };
+}
+
+test('reports a browser opener that exits with a non-zero code', () => {
+  const opener = fakeOpener();
+  openBrowser('http://127.0.0.1:1234/token/', { platform: 'darwin', env: {}, spawnFn: opener.spawnFn, write: opener.write });
+  assert.deepEqual(opener.calls[0].args, ['http://127.0.0.1:1234/token/']);
+  assert.equal(opener.calls[0].file, 'open');
+  assert.deepEqual(opener.messages, []);
+  opener.child.emit('exit', 1, null);
+  assert.equal(opener.messages.length, 1);
+  assert.match(opener.messages[0], /Could not open a browser automatically \(open exited with code 1\)/);
+  assert.match(opener.messages[0], /Open the URL above/);
+});
+
+test('stays silent when the browser opener succeeds', () => {
+  const opener = fakeOpener();
+  openBrowser('http://127.0.0.1:1234/token/', { platform: 'darwin', env: { TMUX: '/tmp/tmux-501/default,1,0' }, spawnFn: opener.spawnFn, write: opener.write });
+  opener.child.emit('exit', 0, null);
+  assert.deepEqual(opener.messages, []);
+});
+
+test('adds a tmux hint when a browser launch fails inside tmux', () => {
+  const opener = fakeOpener();
+  openBrowser('http://127.0.0.1:1234/token/', { platform: 'darwin', env: { TMUX: '/tmp/tmux-501/default,1,0' }, spawnFn: opener.spawnFn, write: opener.write });
+  opener.child.emit('exit', 1, null);
+  assert.equal(opener.messages.length, 2);
+  assert.match(opener.messages[1], /inside tmux/);
+  assert.match(opener.messages[1], /graphical session that no longer exists/);
+  assert.match(opener.messages[1], /Restart the tmux server/);
+});
+
+test('reports a browser opener that cannot start, and warns only once', () => {
+  const opener = fakeOpener();
+  openBrowser('http://127.0.0.1:1234/token/', { platform: 'linux', env: {}, spawnFn: opener.spawnFn, write: opener.write });
+  assert.equal(opener.calls[0].file, 'xdg-open');
+  opener.child.emit('error', new Error('spawn xdg-open ENOENT'));
+  opener.child.emit('exit', 1, null);
+  assert.equal(opener.messages.length, 1);
+  assert.match(opener.messages[0], /spawn xdg-open ENOENT/);
+});
+
+test('reports a browser opener that a signal stopped', () => {
+  const opener = fakeOpener();
+  openBrowser('http://127.0.0.1:1234/token/', { platform: 'darwin', env: {}, spawnFn: opener.spawnFn, write: opener.write });
+  opener.child.emit('exit', null, 'SIGTERM');
+  assert.match(opener.messages[0], /open stopped with signal SIGTERM/);
 });
 
 test('interface source keeps focus actions, safe review rendering, and Other input rules', async () => {

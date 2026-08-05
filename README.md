@@ -28,6 +28,8 @@ ask-questions --file examples/request.json --no-ding
 
 The sound starts only after the local page is ready, also works with `--no-open`, and does not write sound data or status to standard output. If both `--ding` and `--no-ding` occur, the last option wins.
 
+The command opens the session URL with the platform browser opener. When that opener cannot start, or exits with a non-zero code or a signal, the command writes one warning to standard error and keeps waiting. The URL is already on standard error, so you can open it by hand. Inside tmux the warning adds a hint. A tmux server that has run for a long time can stay attached to a graphical session that no longer exists. Every browser launch from such a server fails, on macOS with error `-600`. Restarting the tmux server from a terminal window repairs it.
+
 A human can take hours to answer. There is no built-in answer timeout. The command remains blocked until Submit, Cancel, or an interruption. Calling agents must disable their execution timeout or set it to several hours. Normal waiting is not a failure.
 
 Write questions in simple technical English. Include all relevant context in the Markdown `message`, question, option descriptions, or a supporting Markdown document. The introductory `message` supports headings, lists, emphasis, code, and safe links. Raw HTML is disabled and unsafe link schemes are neutralized.
