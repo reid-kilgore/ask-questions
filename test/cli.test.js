@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { mkdtemp, readFile, realpath, rm, symlink } from 'node:fs/promises';
+import { chmod, mkdtemp, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import test from 'node:test';
 import { tmpdir } from 'node:os';
@@ -10,8 +10,15 @@ import { validatePayload } from '../lib/contract.js';
 
 const command = ['node', resolve('bin/ask-questions.js')];
 
-function startCli(args, input = '', cwd = process.cwd()) {
-  const child = spawn(command[0], [...command.slice(1), ...args], { cwd, stdio: ['pipe', 'pipe', 'pipe'] });
+// Strip tmux variables so spawned-CLI tests behave the same whether or not the test runner
+// itself is inside tmux. Tests that exercise the tmux feature on purpose pass their own env.
+function withoutTmux(env = process.env) {
+  const { TMUX: _tmux, TMUX_PANE: _tmuxPane, ...rest } = env;
+  return rest;
+}
+
+function startCli(args, input = '', cwd = process.cwd(), env = withoutTmux()) {
+  const child = spawn(command[0], [...command.slice(1), ...args], { cwd, env, stdio: ['pipe', 'pipe', 'pipe'] });
   let stdout = '';
   let stderr = '';
   child.stdout.on('data', (chunk) => { stdout += chunk; });
@@ -66,7 +73,9 @@ test('help is a self-sufficient agent contract', async () => {
       'Payload schema (version must be 1):',
       '"message": "optional non-empty Markdown string"',
       '"type": "single" | "multiple" | "text"',
-      '"allowOther": true | false',
+      '"allowOther": true | false,                // optional; choice questions only; defaults to true. Set false to turn Other off.',
+      'Single and multiple-choice questions show an Other free-text option by default.',
+      'Set "allowOther": false on a question to turn it off.',
       '"placeholder": "optional string"',
       'exactly one of markdown or path',
       'Document ids are unique non-empty strings. Document titles are non-empty strings.',
@@ -214,6 +223,34 @@ test('no-browser session cancels with an empty keyed answer object', async () =>
     assert.deepEqual(JSON.parse(session.output().stdout), { version: 1, status: 'cancelled', askerPath: process.cwd(), answers: {} });
   } finally {
     await stopChild(session);
+  }
+});
+
+test('spawned session includes askerTmuxWindow when TMUX_PANE resolves to a window name', async () => {
+  const binDirectory = await mkdtemp(join(tmpdir(), 'ask-questions-fake-tmux-'));
+  const fakeTmux = join(binDirectory, 'tmux');
+  await writeFile(fakeTmux, '#!/bin/sh\nprintf %s "review-work"\n');
+  await chmod(fakeTmux, 0o755);
+  const env = { ...withoutTmux(), TMUX_PANE: '%7', PATH: `${binDirectory}:${process.env.PATH}` };
+  const input = JSON.stringify({ version: 1, questions: [{ id: 'stop', prompt: 'Continue?', type: 'text' }] });
+  const session = startCli(['--no-open', '--no-ding'], input, process.cwd(), env);
+  try {
+    const url = await waitForUrl(session);
+    const sessionData = await fetch(`${url}api/session`).then((response) => response.json());
+    assert.equal(sessionData.askerTmuxWindow, 'review-work');
+    await fetch(`${url}api/cancel`, { method: 'POST' });
+    const close = await session.closed;
+    assert.equal(close.code, 2);
+    assert.deepEqual(JSON.parse(session.output().stdout), {
+      version: 1,
+      status: 'cancelled',
+      askerPath: process.cwd(),
+      askerTmuxWindow: 'review-work',
+      answers: {},
+    });
+  } finally {
+    await stopChild(session);
+    await rm(binDirectory, { recursive: true, force: true });
   }
 });
 

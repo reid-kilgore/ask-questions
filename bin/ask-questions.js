@@ -62,6 +62,8 @@ Question-writing guidance:
   Write questions in simple technical English. Include all relevant context in the question,
   option descriptions, or a supporting Markdown document.
   You can batch several related questions in one payload. A payload with one question is also valid.
+  Single and multiple-choice questions show an Other free-text option by default. There is no need
+  to ask for it. Set "allowOther": false on a question to turn it off.
 
 Payload schema (version must be 1):
   {
@@ -79,7 +81,7 @@ Payload schema (version must be 1):
           "label": "non-empty string",
           "description": "optional string"
         }],
-        "allowOther": true | false,                // optional; choice questions only
+        "allowOther": true | false,                // optional; choice questions only; defaults to true. Set false to turn Other off.
         "placeholder": "optional string"          // optional; text and Other inputs
       }
     ],

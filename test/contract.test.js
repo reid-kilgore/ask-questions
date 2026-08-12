@@ -30,6 +30,32 @@ test('returns a contract error for a non-string text answer', () => {
   assert.throws(() => validateAnswers(payload, [{ questionId: 'choice', value: 'yes', notes: '' }, { questionId: 'text', value: 42, notes: '' }]), ContractError);
 });
 
+test('defaults choice questions to allowOther: true', () => {
+  const singlePayload = { version: 1, questions: [{ id: 'choice', prompt: 'Choose', type: 'single', options: [{ value: 'yes', label: 'Yes' }] }] };
+  validatePayload(singlePayload);
+  assert.equal(singlePayload.questions[0].allowOther, true);
+
+  const multiplePayload = { version: 1, questions: [{ id: 'choice', prompt: 'Choose', type: 'multiple', options: [{ value: 'yes', label: 'Yes' }] }] };
+  validatePayload(multiplePayload);
+  assert.equal(multiplePayload.questions[0].allowOther, true);
+
+  const answers = validateAnswers(singlePayload, [{ questionId: 'choice', value: 'not-an-option', notes: '' }]);
+  assert.equal(answers.choice.value, 'not-an-option');
+});
+
+test('leaves text questions without an allowOther field', () => {
+  const textPayload = { version: 1, questions: [{ id: 'text', prompt: 'Explain', type: 'text' }] };
+  validatePayload(textPayload);
+  assert.equal(textPayload.questions[0].allowOther, undefined);
+});
+
+test('keeps an explicit allowOther: false as an opt-out', () => {
+  const optOutPayload = { version: 1, questions: [{ id: 'choice', prompt: 'Choose', type: 'single', allowOther: false, options: [{ value: 'yes', label: 'Yes' }] }] };
+  validatePayload(optOutPayload);
+  assert.equal(optOutPayload.questions[0].allowOther, false);
+  assert.throws(() => validateAnswers(optOutPayload, [{ questionId: 'choice', value: 'not-an-option', notes: '' }]), ContractError);
+});
+
 test('rejects duplicate question ids and invalid choice options', () => {
   assert.throws(() => validatePayload({ version: 1, questions: [{ id: 'same', prompt: 'One', type: 'single', options: [] }, { id: 'same', prompt: 'Two', type: 'invalid' }] }), ContractError);
   assert.throws(() => validatePayload({ version: 1, questions: [{ id: 'text', prompt: 'A text question', type: 'text', allowOther: true }] }), ContractError);
