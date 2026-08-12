@@ -32,6 +32,8 @@ ask-questions --file examples/request.json
 
 This opens a browser page with a small multi-question batch. Answer the questions (or press Cancel) and the command prints the result JSON and exits.
 
+![The form as a person first sees it: a review question on the left with a required single-choice answer and a notes field, a supporting document open on the right, and a quiet reminder under "Asked from" that selected text can be commented on with Cmd/Ctrl+E.](docs/images/form-overview.png)
+
 A payload looks like this:
 
 ```json
@@ -52,9 +54,13 @@ Send it with `--json '...'`, `--file path.json`, or piped over stdin. `--help` h
 
 The person answering isn't limited to filling in answers — they can comment directly on the text they're reading: a supporting document, the introductory message, or a question's prompt and option descriptions. This is aimed at review-style questions, where the useful response is "here's specifically what's unclear," not just a form field.
 
-**To comment on something:** select the text (or, with no selection, just click into a paragraph, list item, or other block to focus it) and press **Cmd+E** (Ctrl+E off macOS). A small popup opens; type the comment and press Cmd/Ctrl+Enter to save, or Escape to cancel. There's a quiet on-screen reminder of this the first time the page loads.
+**To comment on something:** select the text (or, with no selection, just click into a paragraph, list item, or other block to focus it) and press **Cmd+E** (Ctrl+E off macOS). A small popup opens next to the selected text, marked with a dashed outline so it stays visible while you type; press Cmd/Ctrl+Enter to save, or Escape to cancel and discard both the comment and the outline. There's a quiet on-screen reminder of this the first time the page loads.
+
+![A comment being written in a supporting document: the phrase "page the on-call lead" is marked with a dashed outline showing it's the pending selection, the popup next to it already has a full comment typed in, and the "Cmd/Ctrl + Enter to save · Esc to cancel" hint is visible underneath.](docs/images/comment-popup.png)
 
 A comment always has both a highlight and text explaining it — there's no separate "just highlight, no comment" action. **Clicking an existing highlighted mark reopens the same popup**, pre-filled, to edit it. **Delete or Backspace removes it** while the mark has keyboard focus. A **Comments** button, top right of the main pane, opens a panel listing every comment made so far, with its own count; from there a comment can be jumped to, edited, or removed, wherever in the form it lives.
+
+![The Comments panel open, listing three comments made across a document, the message, and a question prompt — each showing the quoted text it's attached to, the comment itself, and Jump to, Edit, and Remove actions.](docs/images/comments-panel.png)
 
 Annotating is entirely optional. It's never required to submit, and it never changes the shape of the `answers` result — see below.
 

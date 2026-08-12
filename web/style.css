@@ -37,7 +37,16 @@ legend { padding: 0 6px; font-size: 1.05rem; font-weight: 700; line-height: 1.4;
 .option { display: flex; align-items: flex-start; gap: 10px; padding: 11px; border: 1px solid #dde5e1; border-radius: 8px; cursor: pointer; transition: border-color .15s, background .15s; }
 .option:has(input:checked) { border-color: #4d7b6e; background: #f1f8f5; }
 .option small { display: block; margin-top: 3px; color: #60706b; }
-textarea, .other-value { display: block; width: 100%; margin-top: 14px; padding: 10px; border: 1px solid #bfcac5; border-radius: 7px; background: #fff; color: inherit; font: inherit; }
+textarea, .other-value { width: 100%; margin-top: 14px; padding: 10px; border: 1px solid #bfcac5; border-radius: 7px; background: #fff; color: inherit; font: inherit; }
+/* Predates today, but today made it common: every choice question shows
+   Other by default now, so this rule's `.other-value` (an <input>, not a
+   textarea — inline-level by default) used to render even while marked
+   `hidden`, on every choice question rather than just the ones that opted
+   in. Same fault as .annotation-popup above: a bare class selector setting
+   `display` ties with `[hidden]` on specificity and wins. `textarea`
+   itself is never toggled hidden in this app, so it can stay unconditional. */
+textarea { display: block; }
+.other-value:not([hidden]) { display: block; }
 textarea:focus, .other-value:focus { border-color: #4d7b6e; outline: 3px solid #cce5db; }
 .notes-label { display: block; margin-top: 18px; color: #53625d; font-size: .9rem; }
 .notes-label textarea { margin-top: 6px; }
@@ -85,6 +94,11 @@ button.secondary { background: #e8eeeb; color: #263630; }
    no separate "has a comment" variant to distinguish. */
 .annotation-mark { border-radius: 2px; background: rgb(39 103 85 / 10%); box-shadow: inset 0 -2px 0 rgb(39 103 85 / 55%); color: inherit; cursor: pointer; }
 .annotation-mark:focus-visible { outline: 2px solid #9bcebc; outline-offset: 1px; }
+/* Not a saved comment — shown only while a create popup is open, so the
+   text it's about stays visible once the browser's own selection highlight
+   disappears (it does, once the popup's field takes focus). Dashed rather
+   than the saved mark's solid underline, so the two are never confused. */
+.annotation-mark-pending { border-radius: 2px; background: rgb(39 103 85 / 16%); outline: 1px dashed rgb(39 103 85 / 65%); outline-offset: 1px; }
 
 .annotation-popup { position: fixed; z-index: 30; width: 220px; padding: 8px; border: 1px solid #d5dfda; border-radius: 8px; background: #fff; }
 /* Never set `display` unconditionally on a selector combined with the

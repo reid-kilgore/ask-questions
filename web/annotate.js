@@ -152,17 +152,22 @@ function domPositionAt(root, target) {
   return last ? { node: last, offset: last.nodeValue.length } : { node: root, offset: 0 };
 }
 
+function rangeAt(root, start, end) {
+  const startPosition = domPositionAt(root, start);
+  const endPosition = domPositionAt(root, end);
+  const range = document.createRange();
+  range.setStart(startPosition.node, startPosition.offset);
+  range.setEnd(endPosition.node, endPosition.offset);
+  return range;
+}
+
 // Wrapping never changes any text node's character count, so re-deriving
 // each mark's DOM position fresh against the current (already partly
 // -marked) DOM is always correct — order between marks does not matter,
 // unlike the string-splicing in assembleAnnotations() below.
 function wrapRange(root, start, end, comment, index) {
   if (start === end) return;
-  const startPosition = domPositionAt(root, start);
-  const endPosition = domPositionAt(root, end);
-  const range = document.createRange();
-  range.setStart(startPosition.node, startPosition.offset);
-  range.setEnd(endPosition.node, endPosition.offset);
+  const range = rangeAt(root, start, end);
   const mark = document.createElement('mark');
   mark.className = 'annotation-mark';
   mark.tabIndex = 0;
@@ -171,6 +176,27 @@ function wrapRange(root, start, end, comment, index) {
   // extractContents() (unlike Range.surroundContents()) splits ancestor
   // elements as needed, so a highlight crossing an inline boundary (e.g.
   // "some *emphasis* text") does not throw.
+  mark.append(range.extractContents());
+  range.insertNode(mark);
+}
+
+// A saved mark's own styling (from wrapRange) is what normally shows what
+// text a comment is about. But the popup focuses its own field the moment
+// it opens, so the person can start typing immediately — and once focus
+// leaves the document, the browser's native selection highlight stops
+// rendering, even though nothing has been saved yet (confirmed:
+// window.getSelection().toString() goes empty, though a stale Range
+// remains). Without this, there is no visible connection at all between
+// the open popup and the text it is about to be attached to. This mark
+// carries no comment and no index — it is not a stored annotation, only a
+// placeholder — and target.reset() (already called on save and on
+// cancel/discard) is what removes it, the same full-rebuild path
+// everything else here already goes through.
+function markPending(root, start, end) {
+  if (start === end) return;
+  const range = rangeAt(root, start, end);
+  const mark = document.createElement('mark');
+  mark.className = 'annotation-mark-pending';
   mark.append(range.extractContents());
   range.insertNode(mark);
 }
@@ -343,18 +369,25 @@ function place(rect) {
   popup.style.top = `${Math.max(8, rect.top + window.scrollY - popup.offsetHeight - 8)}px`;
 }
 
-function hidePopup() {
+// `discard`: when the popup closes without saving (Escape, clicking away),
+// a 'create' popup's pending mark (see markPending) needs to be stripped
+// back out via the target's normal full rebuild — there is nothing to
+// discard after a save, since save() already called reset() with the
+// range now genuinely committed to the store.
+function hidePopup({ discard = false } = {}) {
+  if (discard && pending?.mode === 'create') targets.get(keyString(pending.key))?.reset();
   pending = null;
   popup.hidden = true;
   commentInput.value = '';
   popupStatus.textContent = '';
 }
 
-function openCreatePopup(key, start, end, rect) {
+function openCreatePopup(key, root, start, end, rect) {
   pending = { mode: 'create', key, start, end };
   commentInput.value = '';
   popupStatus.textContent = '';
   popup.hidden = false;
+  markPending(root, start, end);
   place(rect);
   commentInput.focus();
 }
@@ -456,7 +489,7 @@ function annotateFromShortcut() {
       if (start !== null && end !== null) {
         const [lo, hi] = start <= end ? [start, end] : [end, start];
         if (lo !== hi) {
-          openCreatePopup(startTarget.key, lo, hi, range.getBoundingClientRect());
+          openCreatePopup(startTarget.key, startTarget.root, lo, hi, range.getBoundingClientRect());
           return;
         }
       }
@@ -470,7 +503,7 @@ function annotateFromShortcut() {
     const target = resolveTarget(el);
     if (target) {
       const text = targets.get(keyString(target.key)).text;
-      openCreatePopup(target.key, 0, text.length, el.getBoundingClientRect());
+      openCreatePopup(target.key, target.root, 0, text.length, el.getBoundingClientRect());
     }
   }
 }
@@ -493,11 +526,11 @@ if (typeof document !== 'undefined') {
     if (event.key === 'Escape') {
       event.preventDefault();
       event.stopPropagation();
-      hidePopup();
+      hidePopup({ discard: true });
     }
   });
   document.addEventListener('mousedown', (event) => {
-    if (!popup.hidden && !popup.contains(event.target)) hidePopup();
+    if (!popup.hidden && !popup.contains(event.target)) hidePopup({ discard: true });
   });
 
   // Clicking an existing mark opens the same edit popup the side panel
