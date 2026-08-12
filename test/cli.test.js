@@ -112,6 +112,17 @@ test('help is a self-sufficient agent contract', async () => {
       'Capture only the submitted JSON.',
       'Inline Markdown document:',
       'Relative-path Markdown document:',
+      'Annotations:',
+      'CriticMarkup ({==highlight==} and an optional {>>comment<<})',
+      'Anchoring is block level',
+      'annotations is always present in the result, alongside answers',
+      'It never changes the shape of answers.',
+      'The server, not the browser, is the authority on each block\'s plain text',
+      'Annotating is always optional and never blocks Submit.',
+      'Creating an annotation from a text selection is mouse/pointer-only.',
+      'Tab to any block, prompt, or option',
+      'description and press Enter to comment on the whole thing.',
+      'including any annotations, without submitting',
       '"id":"context","title":"Release context","markdown":"## Context',
       '"id":"release-notes","title":"Release notes","path":"examples/release-notes.md"',
       'Examples:',
@@ -191,6 +202,70 @@ test('no-browser session submits a JSON result', async () => {
   }
 });
 
+test('no-browser session submits annotations alongside answers, anchored to the server\'s own block text', async () => {
+  const input = JSON.stringify({
+    version: 1,
+    message: 'A **message** for context.',
+    questions: [{ id: 'choice', prompt: 'Which risk needs attention?', type: 'single', options: [{ value: 'rollback', label: 'Rollback', description: 'Revert the release.' }] }],
+    documents: [{ id: 'notes', title: 'Notes', markdown: 'Some supporting notes.' }],
+  });
+  const session = startCli(['--no-open', '--no-ding'], input);
+  try {
+    const url = await waitForUrl(session);
+    const sessionData = await fetch(`${url}api/session`).then((response) => response.json());
+    const messageBlockId = Object.keys(sessionData.messageBlockText)[0];
+    const documentBlockId = Object.keys(sessionData.documents[0].blockText)[0];
+    const response = await fetch(`${url}api/submit`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        answers: [{ questionId: 'choice', value: 'rollback', notes: '' }],
+        annotations: {
+          message: { [messageBlockId]: 'A {==message==}{>>says what?<<} for context.' },
+          documents: { notes: { [documentBlockId]: 'Some {==supporting==} notes.' } },
+          questions: { choice: { prompt: 'Which {==risk==} needs attention?', options: { rollback: '{==Revert==} the release.' } } },
+        },
+      }),
+    });
+    assert.equal(response.status, 200);
+    const close = await session.closed;
+    const result = JSON.parse(session.output().stdout);
+    assert.equal(close.code, 0);
+    assert.deepEqual(result.annotations, {
+      message: { [messageBlockId]: 'A {==message==}{>>says what?<<} for context.' },
+      documents: { notes: { [documentBlockId]: 'Some {==supporting==} notes.' } },
+      questions: { choice: { prompt: 'Which {==risk==} needs attention?', options: { rollback: '{==Revert==} the release.' } } },
+    });
+  } finally {
+    await stopChild(session);
+  }
+});
+
+test('rejects a submitted annotation whose text was not the block\'s own original text', async () => {
+  const input = JSON.stringify({ version: 1, message: 'A message.', questions: [{ id: 'go', prompt: 'Continue?', type: 'text' }] });
+  const session = startCli(['--no-open', '--no-ding'], input);
+  try {
+    const url = await waitForUrl(session);
+    const sessionData = await fetch(`${url}api/session`).then((response) => response.json());
+    const messageBlockId = Object.keys(sessionData.messageBlockText)[0];
+    const response = await fetch(`${url}api/submit`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        answers: [{ questionId: 'go', value: '', notes: '' }],
+        annotations: { message: { [messageBlockId]: 'A rewritten {==message==}.' } },
+      }),
+    });
+    assert.equal(response.status, 400);
+    const body = await response.json();
+    assert.ok(body.issues.some((issue) => issue.location === `annotations.message.${messageBlockId}`));
+    await fetch(`${url}api/cancel`, { method: 'POST' });
+    await session.closed;
+  } finally {
+    await stopChild(session);
+  }
+});
+
 test('server output preserves a __proto__ question id', async () => {
   const input = JSON.stringify({ version: 1, questions: [{ id: '__proto__', prompt: 'Explain', type: 'text', required: true }] });
   const session = startCli(['--no-open', '--no-ding'], input);
@@ -220,7 +295,7 @@ test('no-browser session cancels with an empty keyed answer object', async () =>
     assert.equal(response.status, 200);
     const close = await session.closed;
     assert.equal(close.code, 2);
-    assert.deepEqual(JSON.parse(session.output().stdout), { version: 1, status: 'cancelled', askerPath: process.cwd(), answers: {} });
+    assert.deepEqual(JSON.parse(session.output().stdout), { version: 1, status: 'cancelled', askerPath: process.cwd(), answers: {}, annotations: {} });
   } finally {
     await stopChild(session);
   }
@@ -247,10 +322,33 @@ test('spawned session includes askerTmuxWindow when TMUX_PANE resolves to a wind
       askerPath: process.cwd(),
       askerTmuxWindow: 'review-work',
       answers: {},
+      annotations: {},
     });
   } finally {
     await stopChild(session);
     await rm(binDirectory, { recursive: true, force: true });
+  }
+});
+
+test('serves annotate.js and criticmarkup as importable ES modules, and criticmarkup is not copied into the repo', async () => {
+  const input = JSON.stringify({ version: 1, questions: [{ id: 'stop', prompt: 'Continue?', type: 'text' }] });
+  const session = startCli(['--no-open', '--no-ding'], input);
+  try {
+    const url = await waitForUrl(session);
+    const [annotateResponse, criticmarkupResponse] = await Promise.all([
+      fetch(`${url}annotate.js`),
+      fetch(`${url}vendor/criticmarkup.js`),
+    ]);
+    assert.equal(annotateResponse.status, 200);
+    assert.match(annotateResponse.headers.get('content-type'), /javascript/);
+    assert.match(await annotateResponse.text(), /export function attachMessage/);
+    assert.equal(criticmarkupResponse.status, 200);
+    assert.match(criticmarkupResponse.headers.get('content-type'), /javascript/);
+    assert.match(await criticmarkupResponse.text(), /export function insertAnnotation/);
+    await fetch(`${url}api/cancel`, { method: 'POST' });
+    await session.closed;
+  } finally {
+    await stopChild(session);
   }
 });
 
@@ -280,13 +378,14 @@ test('session renders a Markdown message with the document safety rules', async 
   try {
     const url = await waitForUrl(session);
     const sessionData = await fetch(`${url}api/session`).then((response) => response.json());
-    assert.match(sessionData.messageHtml, /<h1>Context<\/h1>/);
-    assert.match(sessionData.messageHtml, /<ul>/);
+    assert.match(sessionData.messageHtml, /<h1 data-block="[^"]+">Context<\/h1>/);
+    assert.match(sessionData.messageHtml, /<ul data-block="[^"]+">/);
     assert.match(sessionData.messageHtml, /<em>emphasis<\/em>/);
     assert.match(sessionData.messageHtml, /<code>code<\/code>/);
     assert.match(sessionData.messageHtml, /href="https:\/\/example\.com" target="_blank" rel="noopener noreferrer"/);
     assert.doesNotMatch(sessionData.messageHtml, /<script/i);
     assert.doesNotMatch(sessionData.messageHtml, /href="javascript:/i);
+    assert.equal(sessionData.messageBlockText['0-1'], 'Context');
     await fetch(`${url}api/cancel`, { method: 'POST' });
     await session.closed;
   } finally {
@@ -468,7 +567,7 @@ test('interface source keeps focus actions, safe review rendering, and Other inp
   assert.match(index, /id="asker-path"/);
   assert.match(app, /askerPath/);
   assert.match(app, /textContent = session\.askerPath/);
-  assert.match(app, /message\.innerHTML = session\.messageHtml/);
+  assert.match(app, /attachMessage\(message, session\.messageHtml, session\.messageBlockText\)/);
   assert.match(app, /copy/);
   assert.match(app, /event\.repeat/);
   assert.match(app, /event\.metaKey \|\| event\.ctrlKey/);

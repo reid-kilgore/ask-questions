@@ -1,3 +1,5 @@
+import { attachDocument, attachMessage, attachOption, attachPrompt, buildAnnotationsPayload } from './annotate.js';
+
 const session = await fetch('api/session').then(async (response) => {
   if (!response.ok) throw new Error('The local session is unavailable.');
   return response.json();
@@ -9,7 +11,6 @@ const create = (name, properties = {}) => {
   return element;
 };
 
-const addText = (parent, value) => parent.append(document.createTextNode(value));
 const form = document.querySelector('#question-form');
 const questions = document.querySelector('#questions');
 const review = document.querySelector('#review');
@@ -41,7 +42,7 @@ if (session.askerTmuxWindow) {
 }
 if (session.messageHtml) {
   const message = document.querySelector('#message');
-  message.innerHTML = session.messageHtml;
+  attachMessage(message, session.messageHtml, session.messageBlockText);
   message.hidden = false;
 }
 
@@ -56,7 +57,11 @@ function addOption(card, question, option, questionIndex, optionIndex) {
   });
   const content = create('span');
   content.append(create('strong', { textContent: option.label }));
-  if (option.description) content.append(create('small', { textContent: option.description }));
+  if (option.description) {
+    const description = create('small');
+    content.append(description);
+    attachOption(description, question.id, option.value, option.description);
+  }
   label.append(input, content);
   card.append(label);
 }
@@ -96,8 +101,9 @@ session.questions.forEach((question, questionIndex) => {
   const card = create('fieldset', { className: 'question-card' });
   cardsByQuestionId.set(question.id, card);
   const legend = create('legend');
-  addText(legend, `${question.prompt} `);
-  legend.append(create('span', {
+  const promptText = create('span', { className: 'prompt-text' });
+  attachPrompt(promptText, question.id, question.prompt);
+  legend.append(promptText, ' ', create('span', {
     className: question.required ? 'required' : 'optional',
     textContent: question.required ? 'Required' : 'Optional',
   }));
@@ -196,10 +202,34 @@ function incompleteRequiredQuestions(questionList, answers) {
   });
 }
 
-function displayAnswer(question, answer) {
+function displayAnswer(answer) {
   if (answer.value === null || answer.value === '') return 'No answer';
   if (Array.isArray(answer.value)) return answer.value.length === 0 ? 'No answer' : answer.value.join(', ');
   return answer.value;
+}
+
+// Flattens buildAnnotationsPayload() into a readable list for the review
+// screen and Copy as JSON is the true recovery path for the actual result;
+// this is here so a person can see, before submitting, that nothing they
+// marked up is about to be silently dropped.
+function annotationEntries() {
+  const payload = buildAnnotationsPayload();
+  const entries = [];
+  for (const text of Object.values(payload.message ?? {})) entries.push({ label: 'Message', text });
+  for (const [documentId, blocks] of Object.entries(payload.documents ?? {})) {
+    const title = session.documents.find((item) => item.id === documentId)?.title ?? documentId;
+    for (const text of Object.values(blocks)) entries.push({ label: `Document: ${title}`, text });
+  }
+  for (const [questionId, entry] of Object.entries(payload.questions ?? {})) {
+    const question = session.questions.find((item) => item.id === questionId);
+    const index = session.questions.indexOf(question);
+    if (entry.prompt) entries.push({ label: `Question ${index + 1} prompt`, text: entry.prompt });
+    for (const [optionValue, text] of Object.entries(entry.options ?? {})) {
+      const option = question?.options?.find((item) => item.value === optionValue);
+      entries.push({ label: `Question ${index + 1} option: ${option?.label ?? optionValue}`, text });
+    }
+  }
+  return entries;
 }
 
 function renderReview() {
@@ -213,12 +243,24 @@ function renderReview() {
     item.append(create('h3', { textContent: `Question ${index + 1}` }));
     item.append(create('p', { className: 'review-prompt', textContent: question.prompt }));
     const answerLabel = create('p', { className: 'review-label', textContent: 'Answer' });
-    const answerValue = create('p', { className: 'review-value', textContent: displayAnswer(question, answer) });
+    const answerValue = create('p', { className: 'review-value', textContent: displayAnswer(answer) });
     const notesLabel = create('p', { className: 'review-label', textContent: 'Notes' });
     const notesValue = create('p', { className: 'review-value', textContent: answer.notes || 'No notes' });
     item.append(answerLabel, answerValue, notesLabel, notesValue);
     reviewSummary.append(item);
   });
+  const annotations = annotationEntries();
+  if (annotations.length) {
+    const section = create('section', { className: 'review-annotations' });
+    section.append(create('h3', { textContent: 'Annotations' }));
+    annotations.forEach(({ label, text }) => {
+      const item = create('div', { className: 'review-annotation' });
+      item.append(create('p', { className: 'review-label', textContent: label }));
+      item.append(create('p', { className: 'review-value annotation-text', textContent: text }));
+      section.append(item);
+    });
+    reviewSummary.append(section);
+  }
 }
 
 function buildCopiedResult(answers) {
@@ -228,6 +270,7 @@ function buildCopiedResult(answers) {
     askerPath: session.askerPath,
     ...(session.askerTmuxWindow ? { askerTmuxWindow: session.askerTmuxWindow } : {}),
     answers: Object.fromEntries(answers.map(({ questionId, value, notes }) => [questionId, { value, notes }])),
+    annotations: buildAnnotationsPayload(),
     submittedAt: new Date().toISOString(),
   };
 }
@@ -322,7 +365,7 @@ if (session.documents.length === 0) {
   const select = (id) => {
     const documentItem = session.documents.find((item) => item.id === id);
     if (!documentItem) return;
-    content.innerHTML = documentItem.html;
+    attachDocument(content, documentItem);
     buttonsByDocumentId.forEach((button, documentId) => button.classList.toggle('active', documentId === id));
     content.scrollTop = 0;
   };
@@ -382,7 +425,7 @@ form.addEventListener('submit', async (event) => {
   await completeRequest('api/submit', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ answers }),
+    body: JSON.stringify({ answers, annotations: buildAnnotationsPayload() }),
   }, 'submit', 'Answers submitted. The agent can continue.');
 });
 

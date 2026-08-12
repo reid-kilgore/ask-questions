@@ -70,6 +70,19 @@ button.secondary { background: #e8eeeb; color: #263630; }
 .document-content pre { overflow-x: auto; padding: 12px; border-radius: 6px; background: #f0f3f1; }
 .document-content a { color: #1e6652; }
 .empty-documents { color: #64716d; }
+.annotatable { border-radius: 3px; transition: box-shadow .12s; }
+.annotatable:focus-visible { outline: 3px solid #9bcebc; outline-offset: 2px; }
+.prompt-text { cursor: text; }
+.annotation-mark { padding: 0 1px; border-radius: 2px; background: #fdea9b; color: inherit; cursor: pointer; }
+.annotation-mark.has-comment { background: #fdea9b; box-shadow: inset 0 -2px 0 #c99a2e; }
+.annotation-mark:focus-visible { outline: 2px solid #9bcebc; outline-offset: 1px; }
+.annotation-toolbar { position: fixed; z-index: 20; display: flex; align-items: center; gap: 6px; padding: 6px; border: 1px solid #d5dfda; border-radius: 8px; background: #fff; box-shadow: 0 4px 14px rgb(23 32 39 / 16%); }
+.annotation-toolbar button { padding: 6px 10px; font-size: .84rem; }
+.annotation-toolbar textarea { width: 220px; padding: 6px; border: 1px solid #bfcac5; border-radius: 6px; font: inherit; font-size: .84rem; }
+.annotation-status { color: #9d3d2d; font-size: .8rem; }
+.review-annotations { margin-top: 22px; padding-top: 16px; border-top: 1px solid #e2e8e5; }
+.review-annotation { margin: 10px 0; }
+.annotation-text { white-space: pre-wrap; padding: 8px 10px; border-radius: 6px; background: #fdf6d8; font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: .82rem; }
 @media (max-width: 800px) {
   .layout { display: block; height: auto; overflow: visible; }
   .questions-pane { overflow: visible; }

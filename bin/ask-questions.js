@@ -7,11 +7,14 @@ import { fileURLToPath } from 'node:url';
 import { randomBytes } from 'node:crypto';
 import { execFile, spawn } from 'node:child_process';
 import MarkdownIt from 'markdown-it';
-import { ContractError, parseArguments, resolveDocumentPath, validateAnswers, validatePayload } from '../lib/contract.js';
+import { ContractError, parseArguments, resolveDocumentPath, validateAnnotations, validateAnswers, validatePayload } from '../lib/contract.js';
+import { installBlockAnchors } from '../lib/blockAnchor.js';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+const criticmarkupPath = resolve(root, 'node_modules/criticmarkup/src/index.js');
 const markdown = new MarkdownIt({ html: false, linkify: true, typographer: true });
 const defaultLinkOpen = markdown.renderer.rules.link_open ?? ((tokens, index, options, _environment, self) => self.renderToken(tokens, index, options));
+installBlockAnchors(markdown);
 
 function isSafeMarkdownLink(href) {
   try {
@@ -110,8 +113,8 @@ Lifecycle and output:
   Calling agents must disable their execution timeout or set it to several hours.
   Normal waiting is not a failure. After HTTP 200, the page shows a clear
   submitted or cancelled state and tries to close its tab. stdout contains exactly one JSON value:
-  submitted: {"version":1,"status":"submitted","askerPath":"/absolute/path","answers":{"question-id":{"value":"...","notes":"..."}},"submittedAt":"ISO-8601"}
-  cancelled: {"version":1,"status":"cancelled","askerPath":"/absolute/path","answers":{}}
+  submitted: {"version":1,"status":"submitted","askerPath":"/absolute/path","answers":{"question-id":{"value":"...","notes":"..."}},"annotations":{...},"submittedAt":"ISO-8601"}
+  cancelled: {"version":1,"status":"cancelled","askerPath":"/absolute/path","answers":{},"annotations":{}}
   Multiple-choice values are arrays of strings. Single-choice and text values are normal
   values (a single optional choice can be null). Submitted answers are keyed by question id and
   contain value and notes only. Every submitted answer must include a notes string. The Notes
@@ -121,10 +124,37 @@ Lifecycle and output:
   makes a best-effort, short lookup of the current tmux window name. If found, askerTmuxWindow is
   shown near Asked from and included as an optional top-level result field.
 
+Annotations:
+  The person answering can mark up the text they are reading — not only answer the questions —
+  using CriticMarkup ({==highlight==} and an optional {>>comment<<}) directly in the browser.
+  Three surfaces are annotatable: supporting documents, the introductory message, and question
+  prompts together with their option descriptions. Anchoring is block level: a paragraph, heading,
+  list item, or code block is the smallest unit that can be marked up, not an arbitrary character
+  range within one.
+  annotations is always present in the result, alongside answers, and defaults to {} when nothing
+  was marked up or the request was cancelled. It never changes the shape of answers.
+  Every leaf value is the block's, prompt's, or option description's own plain text with
+  CriticMarkup markers spliced in around each highlighted range, so a comment always arrives
+  together with the exact text it applies to:
+  {"message":{"2-3":"a rewritten sentence would be {==clearer==}{>>say why<<}"},
+   "documents":{"doc-id":{"0-1":"{==the risky part==}"}},
+   "questions":{"question-id":{"prompt":"{==which..?==}","options":{"option-value":"{==...==}"}}}}
+  message and documents keys are the source Markdown line range the highlighted block came from
+  (e.g. "2-3"); this is the caller's own document, so that range is directly usable against it.
+  question/option keys are the question id and option value, since prompts and option descriptions
+  never pass through a Markdown renderer and have no line range.
+  The server, not the browser, is the authority on each block's plain text: a submitted annotation
+  is rejected (the same 400 a malformed answer gets) unless stripping its CriticMarkup markers
+  reproduces that text exactly. Annotating is always optional and never blocks Submit.
+  Creating an annotation from a text selection is mouse/pointer-only. Because anchoring is block
+  level, a keyboard user does not need a selection: Tab to any block, prompt, or option
+  description and press Enter to comment on the whole thing. An existing highlight is itself a Tab
+  stop; Enter reopens it and Delete/Backspace removes it.
+
 Clipboard recovery:
   The final review screen has Copy as JSON. It copies the submitted-result JSON that the command
-  would print, without submitting or sending a network request. It can help when a calling agent
-  timed out, as long as the already-loaded page remains open. It is not persistence or session
+  would print, including any annotations, without submitting or sending a network request. It can
+  help when a calling agent timed out, as long as the already-loaded page remains open. It is not persistence or session
   recovery: it does not save answers, restart a stopped command, or restore a closed page.
 
 Exit codes:
@@ -194,14 +224,28 @@ async function readPayload(args) {
   let payload;
   try { payload = JSON.parse(source); } catch { throw new ContractError('Input is not valid JSON.'); }
   validatePayload(payload);
+  // `env.blockText` (populated by installBlockAnchors) is this block's own
+  // plain text — the single authority the browser's annotation offsets and
+  // the server's later validation both anchor to. It travels to the page
+  // alongside `html` so the browser never has to reconstruct it itself.
+  const renderMarkdown = (source) => {
+    const env = {};
+    const html = markdown.render(source, env);
+    return { html, blockText: env.blockText };
+  };
   const documents = await Promise.all((payload.documents ?? []).map(async (document) => {
-    if (document.markdown !== undefined) return { id: document.id, title: document.title, html: markdown.render(document.markdown) };
+    if (document.markdown !== undefined) return { id: document.id, title: document.title, ...renderMarkdown(document.markdown) };
     const documentPath = await resolveDocumentPath(baseDirectory, document.path);
     let sourceMarkdown;
     try { sourceMarkdown = await readFile(documentPath, 'utf8'); } catch (error) { throw new ContractError(`Cannot read document ${document.path}: ${error.message}`); }
-    return { id: document.id, title: document.title, html: markdown.render(sourceMarkdown) };
+    return { id: document.id, title: document.title, ...renderMarkdown(sourceMarkdown) };
   }));
-  return { payload, documents, messageHtml: payload.message ? markdown.render(payload.message) : undefined };
+  const message = payload.message ? renderMarkdown(payload.message) : undefined;
+  const anchors = {
+    message: message?.blockText ?? null,
+    documents: Object.fromEntries(documents.map((document) => [document.id, document.blockText])),
+  };
+  return { payload, documents, messageHtml: message?.html, messageBlockText: message?.blockText, anchors };
 }
 
 function send(response, status, contentType, body) {
@@ -285,12 +329,14 @@ function askerMetadata(askerPath, askerTmuxWindow) {
   return { askerPath, ...(askerTmuxWindow ? { askerTmuxWindow } : {}) };
 }
 
-async function serve(payload, documents, messageHtml, { noOpen, ding, askerPath, askerTmuxWindow }) {
+async function serve(payload, documents, messageHtml, messageBlockText, anchors, { noOpen, ding, askerPath, askerTmuxWindow }) {
   const metadata = askerMetadata(askerPath, askerTmuxWindow);
   const token = randomBytes(24).toString('hex');
   const index = await staticFile('index.html');
   const app = await staticFile('app.js');
+  const annotate = await staticFile('annotate.js');
   const style = await staticFile('style.css');
+  const criticmarkup = await readFile(criticmarkupPath);
   let complete;
   const finished = new Promise((resolveFinished) => { complete = resolveFinished; });
   let done = false;
@@ -303,18 +349,24 @@ async function serve(payload, documents, messageHtml, { noOpen, ding, askerPath,
       const suffix = pathname.slice(prefix.length) || '/';
       if (request.method === 'GET' && suffix === '/') return send(response, 200, 'text/html; charset=utf-8', index);
       if (request.method === 'GET' && suffix === '/app.js') return send(response, 200, 'application/javascript; charset=utf-8', app);
+      if (request.method === 'GET' && suffix === '/annotate.js') return send(response, 200, 'application/javascript; charset=utf-8', annotate);
       if (request.method === 'GET' && suffix === '/style.css') return send(response, 200, 'text/css; charset=utf-8', style);
-      if (request.method === 'GET' && suffix === '/api/session') return send(response, 200, 'application/json; charset=utf-8', JSON.stringify({ title: payload.title, messageHtml, questions: payload.questions, documents, ...metadata }));
+      // The browser has no bundler and no client-side dependencies of its
+      // own; criticmarkup is zero-dependency plain ESM, so it is served
+      // verbatim from node_modules rather than copied into this repo.
+      if (request.method === 'GET' && suffix === '/vendor/criticmarkup.js') return send(response, 200, 'application/javascript; charset=utf-8', criticmarkup);
+      if (request.method === 'GET' && suffix === '/api/session') return send(response, 200, 'application/json; charset=utf-8', JSON.stringify({ title: payload.title, messageHtml, messageBlockText, questions: payload.questions, documents, ...metadata }));
       if (request.method === 'POST' && suffix === '/api/submit') {
         const body = await requestBody(request);
         const answers = validateAnswers(payload, body.answers);
+        const annotations = validateAnnotations(payload, anchors, body.annotations);
         send(response, 200, 'application/json; charset=utf-8', JSON.stringify({ ok: true }));
-        completeOnce({ version: 1, status: 'submitted', ...metadata, answers, submittedAt: new Date().toISOString() });
+        completeOnce({ version: 1, status: 'submitted', ...metadata, answers, annotations, submittedAt: new Date().toISOString() });
         return;
       }
       if (request.method === 'POST' && suffix === '/api/cancel') {
         send(response, 200, 'application/json; charset=utf-8', JSON.stringify({ ok: true }));
-        completeOnce({ version: 1, status: 'cancelled', ...metadata, answers: {} });
+        completeOnce({ version: 1, status: 'cancelled', ...metadata, answers: {}, annotations: {} });
         return;
       }
       return send(response, 404, 'text/plain; charset=utf-8', 'Not found');
@@ -329,7 +381,7 @@ async function serve(payload, documents, messageHtml, { noOpen, ding, askerPath,
   process.stderr.write(sessionUrlMessage(url));
   if (ding) playReadySound();
   if (!noOpen) openBrowser(url);
-  const interrupt = () => completeOnce({ version: 1, status: 'cancelled', ...metadata, answers: {} });
+  const interrupt = () => completeOnce({ version: 1, status: 'cancelled', ...metadata, answers: {}, annotations: {} });
   process.once('SIGINT', interrupt);
   const result = await finished;
   process.removeListener('SIGINT', interrupt);
@@ -343,8 +395,8 @@ export async function main(argv = process.argv.slice(2)) {
     if (args.help) { process.stdout.write(HELP); return 0; }
     const askerPath = process.cwd();
     const askerTmuxWindow = await lookupTmuxWindow();
-    const { payload, documents, messageHtml } = await readPayload(args);
-    const result = await serve(payload, documents, messageHtml, { ...args, askerPath, askerTmuxWindow });
+    const { payload, documents, messageHtml, messageBlockText, anchors } = await readPayload(args);
+    const result = await serve(payload, documents, messageHtml, messageBlockText, anchors, { ...args, askerPath, askerTmuxWindow });
     process.stdout.write(`${JSON.stringify(result)}\n`);
     return result.status === 'submitted' ? 0 : 2;
   } catch (error) {

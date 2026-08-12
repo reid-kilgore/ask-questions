@@ -9,9 +9,10 @@
   },
   "scripts": {
     "test": "node --test",
-    "check": "node --check bin/ask-questions.js && node --check lib/contract.js && node --check web/app.js"
+    "check": "node --check bin/ask-questions.js && node --check lib/contract.js && node --check lib/blockAnchor.js && node --check web/app.js && node --check web/annotate.js"
   },
   "dependencies": {
+    "criticmarkup": "file:../criticmarkup",
     "markdown-it": "^14.1.0"
   }
 }

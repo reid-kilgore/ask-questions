@@ -4,6 +4,8 @@
 
 Use `npm link` as the primary installation method. It makes this checkout a laptop-local PATH utility and does not publish a package. Then use the command help as the complete integration contract:
 
+`npm install` needs a sibling checkout at `../criticmarkup` (relative to this repository) — it is a local, zero-dependency plain-ESM library, not a published package, referenced from `package.json` as `"criticmarkup": "file:../criticmarkup"`. The server imports it directly for validation, and serves its single source file to the browser verbatim at `/vendor/criticmarkup.js`, since the browser has no bundler and no other client-side dependencies.
+
 ```sh
 npm install
 npm link
@@ -38,8 +40,22 @@ Write questions in simple technical English. Include all relevant context in the
 
 You can batch several related questions in one payload. A payload with one question is also valid. The included `examples/request.json` shows a multi-question batch.
 
+The person answering can mark up the text they are reading, not only answer the questions, using [CriticMarkup](http://criticmarkup.com/) (`{==highlight==}`, with an optional `{>>comment<<}`) directly in the browser. Three surfaces are annotatable: supporting documents, the introductory `message`, and question prompts together with their option descriptions. Anchoring is block level — a paragraph, heading, list item, or code block is the smallest unit that can be marked up, not an arbitrary character range within one. Creating an annotation from a text selection is mouse/pointer-only; because anchoring is block level, a keyboard user does not need a selection at all — Tab to any block, prompt, or option description and press Enter to comment on the whole thing, and an existing highlight is itself reachable by Tab (Enter reopens it, Delete/Backspace removes it).
+
+The result carries a top-level `annotations` object alongside `answers`, always present and defaulting to `{}` when nothing was marked up or the request was cancelled — it never changes the shape of `answers`. Every leaf value is the block's, prompt's, or option description's own plain text with CriticMarkup markers spliced in around each highlighted range, so a comment always arrives together with the exact text it applies to:
+
+```json
+{
+  "message": { "2-3": "a rewritten sentence would be {==clearer==}{>>say why<<}" },
+  "documents": { "doc-id": { "0-1": "{==the risky part==}" } },
+  "questions": { "question-id": { "prompt": "{==which..?==}", "options": { "option-value": "{==...==}" } } }
+}
+```
+
+`message` and `documents` keys are the source Markdown line range the highlighted block came from (e.g. `"2-3"`) — the calling agent holds the original document, so that range is directly usable against it. `question`/`option` keys are the question id and option value, since prompts and option descriptions never pass through the Markdown renderer and have no line range. The server, not the browser, is the authority on each block's plain text: a submitted annotation is rejected — the same refusal a malformed answer gets — unless stripping its CriticMarkup markers reproduces that text exactly. Annotating is always optional and never blocks Submit.
+
 Supporting documents use unique non-empty `id` and `title` values. Each document has exactly one of `markdown` or relative `path`. For `--file`, paths are relative to the payload file directory. For `--json` and standard input, paths are relative to the current directory. Lexical and symbolic-link checks keep paths inside that directory. The command help includes complete examples for inline Markdown and relative-path Markdown documents.
 
 The browser interface is a proof of concept. It starts in Focus mode and also provides an All questions view. It has no authentication, persistence, or session recovery. It only binds to `127.0.0.1`, uses a random URL token, and does not serve document files directly.
 
-On the final review screen, **Copy as JSON** copies the submitted-result JSON without submitting or making a network request. This is useful if the calling agent times out while the page is still open. It is a manual clipboard recovery option, not persistence or session recovery. It cannot restart a stopped command or restore a closed page.
+On the final review screen, **Copy as JSON** copies the submitted-result JSON, including any annotations, without submitting or making a network request. This is useful if the calling agent times out while the page is still open. It is a manual clipboard recovery option, not persistence or session recovery. It cannot restart a stopped command or restore a closed page.
