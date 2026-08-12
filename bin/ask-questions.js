@@ -48,6 +48,9 @@ Local installation for this proof of concept:
   npm link
   Use npm link as the primary installation method. It makes this checkout a laptop-local
   PATH utility. It does not publish a package.
+  npm install needs a sibling checkout at ../criticmarkup (relative to this repository) --
+  a small zero-dependency library this project also uses, cloned separately because it is
+  not a published package either. Clone both repositories side by side before npm install.
 
 Input modes:
   --json JSON       Read an inline JSON payload.
@@ -125,37 +128,46 @@ Lifecycle and output:
   shown near Asked from and included as an optional top-level result field.
 
 Annotations:
-  The person answering can mark up the text they are reading — not only answer the questions —
-  using CriticMarkup ({==highlight==} and an optional {>>comment<<}) directly in the browser.
-  Three surfaces are annotatable: supporting documents, the introductory message, and question
-  prompts together with their option descriptions. Anchoring is block level: a paragraph, heading,
-  list item, or code block is the smallest unit that can be marked up, not an arbitrary character
-  range within one.
+  The person answering can comment directly on the text they are reading -- not only answer the
+  questions. Three surfaces are annotatable: supporting documents, the introductory message, and
+  question prompts together with their option descriptions. Anchoring is block level: a paragraph,
+  heading, list item, or code block is the smallest unit that can be marked up, not an arbitrary
+  character range within one. A comment always has both a highlight and text explaining it; there
+  is no highlight-only action. Annotating is always optional and never blocks Submit.
+  To comment, select text and press Cmd+E (Ctrl+E off macOS) -- the browser's own "search using
+  selection" binding for that key is suppressed on this page so it can be reused. With no
+  selection, the same shortcut on a focused block, prompt, or option description comments on the
+  whole thing; that is also the keyboard path, since these elements are not text inputs a keyboard
+  user could start a selection inside. A quiet on-screen reminder of this appears on the page.
+  Cmd/Ctrl+Enter in the popup saves the comment and Escape cancels; both take precedence over the
+  same shortcuts used elsewhere in the form while the comment field has focus, and Cmd/Ctrl+E
+  itself does nothing while typing in the comment field or an ordinary answer field. Clicking an
+  existing mark reopens the same popup, pre-filled, to edit it; Delete/Backspace removes it while
+  a mark has keyboard focus. A Comments button, top right of the main pane, opens a panel listing
+  every comment made so far, with its own count, where a comment can be jumped to, edited, or
+  removed, wherever in the form it lives.
   annotations is always present in the result, alongside answers, and defaults to {} when nothing
   was marked up or the request was cancelled. It never changes the shape of answers.
   Every leaf value is the block's, prompt's, or option description's own plain text with
-  CriticMarkup markers spliced in around each highlighted range, so a comment always arrives
-  together with the exact text it applies to:
+  CriticMarkup ({==highlight==}{>>comment<<}) markers spliced in around each annotated range, so a
+  comment always arrives together with the exact text it applies to:
   {"message":{"2-3":"a rewritten sentence would be {==clearer==}{>>say why<<}"},
-   "documents":{"doc-id":{"0-1":"{==the risky part==}"}},
-   "questions":{"question-id":{"prompt":"{==which..?==}","options":{"option-value":"{==...==}"}}}}
-  message and documents keys are the source Markdown line range the highlighted block came from
+   "documents":{"doc-id":{"0-1":"{==the risky part==}{>>needs a runbook link<<}"}},
+   "questions":{"question-id":{"prompt":"{==which..?==}{>>ambiguous<<}"}}}
+  message and documents keys are the source Markdown line range the annotated block came from
   (e.g. "2-3"); this is the caller's own document, so that range is directly usable against it.
   question/option keys are the question id and option value, since prompts and option descriptions
   never pass through a Markdown renderer and have no line range.
   The server, not the browser, is the authority on each block's plain text: a submitted annotation
   is rejected (the same 400 a malformed answer gets) unless stripping its CriticMarkup markers
-  reproduces that text exactly. Annotating is always optional and never blocks Submit.
-  Creating an annotation from a text selection is mouse/pointer-only. Because anchoring is block
-  level, a keyboard user does not need a selection: Tab to any block, prompt, or option
-  description and press Enter to comment on the whole thing. An existing highlight is itself a Tab
-  stop; Enter reopens it and Delete/Backspace removes it.
+  reproduces that text exactly.
 
 Clipboard recovery:
   The final review screen has Copy as JSON. It copies the submitted-result JSON that the command
   would print, including any annotations, without submitting or sending a network request. It can
-  help when a calling agent timed out, as long as the already-loaded page remains open. It is not persistence or session
-  recovery: it does not save answers, restart a stopped command, or restore a closed page.
+  help when a calling agent timed out, as long as the already-loaded page remains open.
+  It is not persistence or session recovery: it does not save answers, restart a stopped command,
+  or restore a closed page.
 
 Exit codes:
   0 submitted; 2 cancelled or interrupted with Ctrl-C; 1 invalid input or server error.

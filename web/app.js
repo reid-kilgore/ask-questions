@@ -1,4 +1,4 @@
-import { attachDocument, attachMessage, attachOption, attachPrompt, buildAnnotationsPayload } from './annotate.js';
+import { attachDocument, attachMessage, attachOption, attachPrompt, buildAnnotationsPayload, listAnnotations, onAnnotationsChanged, openEditPopup, removeAnnotation, scrollToAnnotation } from './annotate.js';
 
 const session = await fetch('api/session').then(async (response) => {
   if (!response.ok) throw new Error('The local session is unavailable.');
@@ -208,6 +208,23 @@ function displayAnswer(answer) {
   return answer.value;
 }
 
+// Turns a structured annotation key (see web/annotate.js) into a label a
+// person recognizes — shared between the review screen and the side
+// panel, so the two never describe the same comment two different ways.
+function describeKey(key) {
+  const [scope, ...rest] = key;
+  if (scope === 'message') return 'Message';
+  if (scope === 'document') {
+    const title = session.documents.find((item) => item.id === rest[0])?.title ?? rest[0];
+    return `Document: ${title}`;
+  }
+  const question = session.questions.find((item) => item.id === rest[0]);
+  const index = session.questions.indexOf(question);
+  if (scope === 'prompt') return `Question ${index + 1} prompt`;
+  const option = question?.options?.find((item) => item.value === rest[1]);
+  return `Question ${index + 1} option: ${option?.label ?? rest[1]}`;
+}
+
 // Flattens buildAnnotationsPayload() into a readable list for the review
 // screen and Copy as JSON is the true recovery path for the actual result;
 // this is here so a person can see, before submitting, that nothing they
@@ -215,18 +232,14 @@ function displayAnswer(answer) {
 function annotationEntries() {
   const payload = buildAnnotationsPayload();
   const entries = [];
-  for (const text of Object.values(payload.message ?? {})) entries.push({ label: 'Message', text });
+  for (const text of Object.values(payload.message ?? {})) entries.push({ label: describeKey(['message']), text });
   for (const [documentId, blocks] of Object.entries(payload.documents ?? {})) {
-    const title = session.documents.find((item) => item.id === documentId)?.title ?? documentId;
-    for (const text of Object.values(blocks)) entries.push({ label: `Document: ${title}`, text });
+    for (const text of Object.values(blocks)) entries.push({ label: describeKey(['document', documentId]), text });
   }
   for (const [questionId, entry] of Object.entries(payload.questions ?? {})) {
-    const question = session.questions.find((item) => item.id === questionId);
-    const index = session.questions.indexOf(question);
-    if (entry.prompt) entries.push({ label: `Question ${index + 1} prompt`, text: entry.prompt });
+    if (entry.prompt) entries.push({ label: describeKey(['prompt', questionId]), text: entry.prompt });
     for (const [optionValue, text] of Object.entries(entry.options ?? {})) {
-      const option = question?.options?.find((item) => item.value === optionValue);
-      entries.push({ label: `Question ${index + 1} option: ${option?.label ?? optionValue}`, text });
+      entries.push({ label: describeKey(['option', questionId, optionValue]), text });
     }
   }
   return entries;
@@ -351,6 +364,11 @@ document.addEventListener('keydown', (event) => {
   else nextQuestion.click();
 });
 
+// Reassigned below when there are documents to show; jumpToAnnotation()
+// needs a way to switch tabs regardless, since a listed comment can belong
+// to a document that is not the one currently selected.
+let selectDocument = () => {};
+
 const documents = document.querySelector('#documents');
 if (session.documents.length === 0) {
   const empty = create('div', { className: 'empty-documents' });
@@ -369,6 +387,7 @@ if (session.documents.length === 0) {
     buttonsByDocumentId.forEach((button, documentId) => button.classList.toggle('active', documentId === id));
     content.scrollTop = 0;
   };
+  selectDocument = select;
   session.documents.forEach((documentItem, index) => {
     const button = create('button', { type: 'button', textContent: documentItem.title });
     button.classList.toggle('active', index === 0);
@@ -443,4 +462,73 @@ copyJsonButton.addEventListener('click', async () => {
 
 cancelButton.addEventListener('click', async () => {
   await completeRequest('api/cancel', { method: 'POST' }, 'cancel', 'Cancelled. No answers were submitted.');
+});
+
+// --- Comments panel -----------------------------
+//
+// Reviewing and managing comments already made — jump to one, remove it,
+// edit it. Creating a new one stays where the eye already is (select text,
+// or focus a block, and press Cmd/Ctrl+E — see web/annotate.js), not here.
+
+const annotationPanel = document.querySelector('#annotation-panel');
+const annotationPanelToggle = document.querySelector('#annotation-panel-toggle');
+const annotationPanelClose = document.querySelector('#annotation-panel-close');
+const annotationPanelList = document.querySelector('#annotation-panel-list');
+const annotationCount = document.querySelector('#annotation-count');
+
+function setPanelOpen(open) {
+  annotationPanel.classList.toggle('open', open);
+  annotationPanelToggle.ariaExpanded = String(open);
+  if (open) renderAnnotationPanel();
+}
+
+function jumpToAnnotation(entry) {
+  const [scope] = entry.key;
+  if (scope === 'document') selectDocument(entry.key[1]);
+  else if ((scope === 'prompt' || scope === 'option') && focused) allQuestionsButton.click();
+  setPanelOpen(false);
+  // The view switch above can replace the DOM the mark lives in; wait a
+  // frame so scrollToAnnotation finds the freshly rendered element.
+  requestAnimationFrame(() => scrollToAnnotation(entry.key, entry.index));
+}
+
+function renderAnnotationPanel() {
+  const entries = listAnnotations();
+  annotationCount.textContent = String(entries.length);
+  annotationPanelList.replaceChildren();
+  if (entries.length === 0) {
+    annotationPanelList.append(create('p', { className: 'annotation-panel-empty', textContent: 'No comments yet. Select text (or focus a block) and press Cmd/Ctrl+E to add one.' }));
+    return;
+  }
+  entries.forEach((entry) => {
+    const item = create('article', { className: 'annotation-entry' });
+    item.append(create('p', { className: 'annotation-entry-location', textContent: describeKey(entry.key) }));
+    item.append(create('p', { className: 'annotation-entry-highlight', textContent: `"${entry.highlight}"` }));
+    item.append(create('p', { className: 'annotation-entry-comment', textContent: entry.comment }));
+    const actions = create('div', { className: 'annotation-entry-actions' });
+    const jumpButton = create('button', { type: 'button', textContent: 'Jump to' });
+    jumpButton.addEventListener('click', () => jumpToAnnotation(entry));
+    const editButton = create('button', { type: 'button', textContent: 'Edit' });
+    editButton.addEventListener('click', () => {
+      if (entry.key[0] === 'document') selectDocument(entry.key[1]);
+      else if ((entry.key[0] === 'prompt' || entry.key[0] === 'option') && focused) allQuestionsButton.click();
+      setPanelOpen(false);
+      requestAnimationFrame(() => openEditPopup(entry.key, entry.index));
+    });
+    const removeButton = create('button', { type: 'button', textContent: 'Remove' });
+    removeButton.addEventListener('click', () => removeAnnotation(entry.key, entry.index));
+    actions.append(jumpButton, editButton, removeButton);
+    item.append(actions);
+    annotationPanelList.append(item);
+  });
+}
+
+annotationPanelToggle.addEventListener('click', () => setPanelOpen(!annotationPanel.classList.contains('open')));
+annotationPanelClose.addEventListener('click', () => setPanelOpen(false));
+document.addEventListener('keydown', (event) => {
+  if (event.key === 'Escape' && annotationPanel.classList.contains('open')) setPanelOpen(false);
+});
+onAnnotationsChanged(() => {
+  annotationCount.textContent = String(listAnnotations().length);
+  if (annotationPanel.classList.contains('open')) renderAnnotationPanel();
 });

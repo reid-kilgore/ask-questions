@@ -7,9 +7,20 @@
     <link rel="stylesheet" href="style.css">
   </head>
   <body>
+    <aside id="annotation-panel" class="annotation-panel" aria-label="Your comments">
+      <header class="annotation-panel-header">
+        <h2>Comments</h2>
+        <button type="button" id="annotation-panel-close" aria-label="Close comments panel">×</button>
+      </header>
+      <div id="annotation-panel-list"></div>
+    </aside>
     <main class="layout">
       <section class="questions-pane" aria-labelledby="page-title">
-        <header class="page-header"><p class="eyebrow">Input needed</p><h1 id="page-title">Questions</h1><div class="asker-context"><span class="asker-label">Asked from</span><code id="asker-path" class="asker-path"></code><span id="asker-tmux-window" class="asker-tmux-window" hidden></span></div><div id="message" class="message" hidden></div></header>
+        <!-- Not a grid item: it lives inside .questions-pane, not .layout,
+             so it cannot affect where that pane or .documents-pane land.
+             See .annotation-panel-toggle in style.css. -->
+        <button type="button" id="annotation-panel-toggle" class="annotation-panel-toggle" aria-expanded="false" aria-controls="annotation-panel">Comments <span id="annotation-count">0</span></button>
+        <header class="page-header"><p class="eyebrow">Input needed</p><h1 id="page-title">Questions</h1><div class="asker-context"><span class="asker-label">Asked from</span><code id="asker-path" class="asker-path"></code><span id="asker-tmux-window" class="asker-tmux-window" hidden></span></div><p class="annotate-hint">Select text, or focus a block, and press <kbd>Cmd/Ctrl+E</kbd> to comment on it.</p><div id="message" class="message" hidden></div></header>
         <form id="question-form" novalidate>
           <div class="view-toolbar" role="group" aria-label="Question view">
             <span class="view-label">View</span>

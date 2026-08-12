@@ -1,8 +1,14 @@
 // Lets a person mark up the text they are reading — documents, the message,
-// question prompts, and option descriptions — with CriticMarkup highlights
-// and optional comments, block level. See README.md for the shape this
-// produces; this module only builds that shape and drives the DOM, it does
-// not know about submit/cancel/review at all — app.js owns that.
+// question prompts, and option descriptions — with a CriticMarkup comment,
+// block level. See README.md for the shape this produces; this module only
+// builds that shape and drives the DOM, it does not know about
+// submit/cancel/review at all — app.js owns that.
+//
+// Every annotation carries a comment; there is no highlight-only action.
+// Creating one is Cmd/Ctrl+E — on a selection, or on a focused block with
+// no selection for a whole-block comment — rather than a toolbar that pops
+// up on selection. See the shortcut section below for why, and for the
+// one browser default it has to fight.
 //
 // Anchoring is against plain text the server already sent (`blockText` for
 // documents/message, and the prompt/option strings themselves, which never
@@ -26,16 +32,44 @@ const keyString = (key) => JSON.stringify(key);
 // what keeps add/remove free of incremental-DOM edge cases.
 const targets = new Map();
 
+// blockElements: keyString -> the specific element that carries this key's
+// marks (as opposed to `container`, which for a document/message key is
+// the whole document/message pane). Used only to locate a key's own marks
+// in the DOM — for the side panel's "jump to" and "edit", and nowhere else.
+const blockElements = new Map();
+
 // store: keyString -> [{ start, end, comment }], offsets against `text`.
 const store = new Map();
+
+// Anyone (app.js's side panel) who wants to know when an annotation is
+// added, edited, or removed — from any of the paths below — subscribes
+// here, rather than this module reaching into app.js to re-render anything
+// itself; see the module comment on why this stays a one-way boundary.
+const changeListeners = new Set();
+export function onAnnotationsChanged(callback) {
+  changeListeners.add(callback);
+  return () => changeListeners.delete(callback);
+}
+function notifyChanged() {
+  changeListeners.forEach((callback) => callback());
+}
 
 function addRange(key, start, end, comment) {
   if (start >= end) return { ok: false, reason: 'Select some text first.' };
   const ranges = store.get(keyString(key)) ?? [];
   if (ranges.some((range) => start < range.end && range.start < end)) {
-    return { ok: false, reason: 'That text already has an annotation.' };
+    return { ok: false, reason: 'That text already has a comment.' };
   }
   store.set(keyString(key), [...ranges, { start, end, comment }]);
+  return { ok: true };
+}
+
+function updateRangeComment(key, index, comment) {
+  const ranges = store.get(keyString(key)) ?? [];
+  if (index < 0 || index >= ranges.length) return { ok: false, reason: 'That comment no longer exists.' };
+  const next = ranges.slice();
+  next[index] = { ...next[index], comment };
+  store.set(keyString(key), next);
   return { ok: true };
 }
 
@@ -48,27 +82,35 @@ function removeRange(key, index) {
 
 /**
  * CriticMarkup has no escape mechanism (see the criticmarkup README): a
- * highlight body ends at the first literal `==}` that follows it, and a
- * comment body ends at the first literal `<<}`. Text or a comment
+ * highlight body ends at the first literal `==}` that follows it. Text
  * containing that exact sequence would produce markup that looks valid but
  * does not round-trip — the server's own `clearAnnotations` check (which is
  * correct, and stays exactly as it is) would then reject the whole submit
  * request, with no indication of which mark caused it. Refusing at
- * creation time, with a reason the person can act on, is the fix: don't
- * produce markup that cannot round-trip in the first place.
+ * creation time, with a reason the person can act on, is the fix.
  *
  * Pure and DOM-free on purpose, so it is directly testable without a
  * browser.
  *
  * @param {string} highlightText
- * @param {string|null} comment
- * @returns {string|null} A reason the annotation cannot be created, or null if it is safe.
+ * @returns {string|null} A reason the highlight cannot be created, or null if it is safe.
  */
-export function unsafeDelimiterReason(highlightText, comment) {
+export function unsafeHighlightReason(highlightText) {
   if (highlightText.includes('==}')) {
     return 'That text contains "==}", which CriticMarkup cannot highlight — it has no way to escape it. Select a shorter or different range.';
   }
-  if (comment !== null && comment.includes('<<}')) {
+  return null;
+}
+
+/**
+ * Same idea as {@link unsafeHighlightReason}, for the comment body's own
+ * terminator (`<<}`).
+ *
+ * @param {string} comment
+ * @returns {string|null}
+ */
+export function unsafeCommentReason(comment) {
+  if (comment.includes('<<}')) {
     return 'That comment contains "<<}", which CriticMarkup cannot store — it has no way to escape it. Remove that and try again.';
   }
   return null;
@@ -113,7 +155,7 @@ function domPositionAt(root, target) {
 // Wrapping never changes any text node's character count, so re-deriving
 // each mark's DOM position fresh against the current (already partly
 // -marked) DOM is always correct — order between marks does not matter,
-// unlike the string-splicing in buildPayload() below.
+// unlike the string-splicing in assembleAnnotations() below.
 function wrapRange(root, start, end, comment, index) {
   if (start === end) return;
   const startPosition = domPositionAt(root, start);
@@ -122,10 +164,10 @@ function wrapRange(root, start, end, comment, index) {
   range.setStart(startPosition.node, startPosition.offset);
   range.setEnd(endPosition.node, endPosition.offset);
   const mark = document.createElement('mark');
-  mark.className = comment ? 'annotation-mark has-comment' : 'annotation-mark';
+  mark.className = 'annotation-mark';
   mark.tabIndex = 0;
   mark.dataset.annotationIndex = String(index);
-  if (comment) mark.title = comment;
+  mark.title = comment;
   // extractContents() (unlike Range.surroundContents()) splits ancestor
   // elements as needed, so a highlight crossing an inline boundary (e.g.
   // "some *emphasis* text") does not throw.
@@ -142,6 +184,7 @@ function renderRanges(root, key) {
 
 function registerTarget(el, key, text, container, reset) {
   targets.set(keyString(key), { key, text, container, reset });
+  blockElements.set(keyString(key), el);
   el.tabIndex = 0;
   el.classList.add('annotatable');
 }
@@ -264,143 +307,286 @@ function resolveTarget(node) {
   return target ? { key, root: scopeEl } : null;
 }
 
-// --- Toolbar and popover UI -----------------------------
+// --- The comment popup -----------------------------
 //
-// Declared with `let` and built only when `document` exists, so that this
-// module — and the pure, DOM-free functions above (unsafeDelimiterReason,
-// firstOccurrenceOnly, assembleAnnotations) — stay importable and testable
-// under plain Node, with no browser and no new dependency. Nothing here
-// changes what runs in an actual browser: `document` always exists there,
-// so this block always runs, exactly as before.
-let toolbar, highlightButton, commentButton, commentInput, addCommentButton, status;
+// One small popup, not a toolbar: there is only one action (write a
+// comment), so there is nothing to choose between. Declared with `let` and
+// built only when `document` exists, so this module — and the pure,
+// DOM-free functions above — stay importable and testable under plain
+// Node, with no browser and no new dependency. Nothing here changes what
+// runs in an actual browser: `document` always exists there, so this block
+// always runs, exactly as before.
+let popup, commentInput, popupStatus;
 
 if (typeof document !== 'undefined') {
-  toolbar = document.createElement('div');
-  toolbar.className = 'annotation-toolbar';
-  toolbar.hidden = true;
-  highlightButton = Object.assign(document.createElement('button'), { type: 'button', textContent: 'Highlight' });
-  commentButton = Object.assign(document.createElement('button'), { type: 'button', textContent: 'Comment' });
-  commentInput = Object.assign(document.createElement('textarea'), { rows: 2, placeholder: 'Add a comment' });
-  commentInput.hidden = true;
-  addCommentButton = Object.assign(document.createElement('button'), { type: 'button', textContent: 'Add' });
-  addCommentButton.hidden = true;
-  status = document.createElement('span');
-  status.className = 'annotation-status';
-  status.setAttribute('role', 'status');
-  toolbar.append(highlightButton, commentButton, commentInput, addCommentButton, status);
-  document.body.append(toolbar);
+  popup = document.createElement('div');
+  popup.className = 'annotation-popup';
+  popup.hidden = true;
+  commentInput = Object.assign(document.createElement('textarea'), { rows: 2, placeholder: 'Comment on this text' });
+  const hint = document.createElement('div');
+  hint.className = 'annotation-popup-hint';
+  hint.textContent = '⌘/Ctrl + Enter to save · Esc to cancel';
+  popupStatus = document.createElement('div');
+  popupStatus.className = 'annotation-status';
+  popupStatus.setAttribute('role', 'status');
+  popup.append(commentInput, hint, popupStatus);
+  document.body.append(popup);
 }
 
-let pending = null; // { key, root, start, end }
+// pending: what the open popup is acting on.
+//   { mode: 'create', key, start, end }
+//   { mode: 'edit', key, index }
+let pending = null;
 
 function place(rect) {
-  toolbar.style.left = `${Math.max(8, rect.left + window.scrollX)}px`;
-  toolbar.style.top = `${Math.max(8, rect.top + window.scrollY - toolbar.offsetHeight - 8)}px`;
+  popup.style.left = `${Math.max(8, rect.left + window.scrollX)}px`;
+  popup.style.top = `${Math.max(8, rect.top + window.scrollY - popup.offsetHeight - 8)}px`;
 }
 
-function hideToolbar() {
+function hidePopup() {
   pending = null;
-  toolbar.hidden = true;
-  commentInput.hidden = true;
+  popup.hidden = true;
   commentInput.value = '';
-  addCommentButton.hidden = true;
-  status.textContent = '';
+  popupStatus.textContent = '';
 }
 
-function openCreate(key, root, start, end, rect) {
-  pending = { key, root, start, end };
-  status.textContent = '';
-  commentInput.hidden = true;
-  addCommentButton.hidden = true;
-  toolbar.hidden = false;
+function openCreatePopup(key, start, end, rect) {
+  pending = { mode: 'create', key, start, end };
+  commentInput.value = '';
+  popupStatus.textContent = '';
+  popup.hidden = false;
   place(rect);
-  highlightButton.focus();
+  commentInput.focus();
 }
 
-function commit(comment) {
+/**
+ * Opens the same popup pre-filled with an existing comment — for the side
+ * panel's edit action, and for clicking directly on a mark. Positions near
+ * the comment's own mark when it is currently rendered (it may not be —
+ * the panel can list a comment on a document that is not the one
+ * currently selected — in which case it falls back to the block/prompt
+ * /option element itself).
+ *
+ * @param {string[]} key
+ * @param {number} index
+ * @returns {boolean} Whether a popup was actually opened.
+ */
+export function openEditPopup(key, index) {
+  const keyStr = keyString(key);
+  const ranges = store.get(keyStr) ?? [];
+  const range = ranges[index];
+  if (!range) return false;
+  const el = blockElements.get(keyStr);
+  const mark = el?.querySelector(`mark.annotation-mark[data-annotation-index="${index}"]`);
+  const rect = (mark ?? el)?.getBoundingClientRect();
+  pending = { mode: 'edit', key, index };
+  commentInput.value = range.comment ?? '';
+  popupStatus.textContent = '';
+  popup.hidden = false;
+  if (rect) place(rect);
+  commentInput.focus();
+  return true;
+}
+
+function save() {
   if (!pending) return;
-  const { key, start, end } = pending;
-  const highlightText = targets.get(keyString(key)).text.slice(start, end);
-  const unsafeReason = unsafeDelimiterReason(highlightText, comment);
-  if (unsafeReason) {
-    status.textContent = unsafeReason;
+  const comment = commentInput.value.trim();
+  if (comment === '') {
+    popupStatus.textContent = 'Add a comment before saving.';
     return;
   }
-  const outcome = addRange(key, start, end, comment);
-  if (!outcome.ok) {
-    status.textContent = outcome.reason;
+  const commentReason = unsafeCommentReason(comment);
+  if (commentReason) {
+    popupStatus.textContent = commentReason;
     return;
   }
-  targets.get(keyString(key)).reset();
-  window.getSelection()?.removeAllRanges();
-  hideToolbar();
+  if (pending.mode === 'create') {
+    const { key, start, end } = pending;
+    const highlightText = targets.get(keyString(key)).text.slice(start, end);
+    const highlightReason = unsafeHighlightReason(highlightText);
+    if (highlightReason) {
+      popupStatus.textContent = highlightReason;
+      return;
+    }
+    const outcome = addRange(key, start, end, comment);
+    if (!outcome.ok) {
+      popupStatus.textContent = outcome.reason;
+      return;
+    }
+    targets.get(keyString(key)).reset();
+    window.getSelection()?.removeAllRanges();
+  } else {
+    const outcome = updateRangeComment(pending.key, pending.index, comment);
+    if (!outcome.ok) {
+      popupStatus.textContent = outcome.reason;
+      return;
+    }
+    targets.get(keyString(pending.key))?.reset();
+  }
+  hidePopup();
+  notifyChanged();
 }
 
-// --- Mouse selection, and keyboard: block-level annotate and acting on an
-// existing mark -----------------------------
+// --- The Cmd/Ctrl+E shortcut -----------------------------
 //
-// Selection-driven annotation is mouse/pointer-only — the blocks, prompts,
-// and option descriptions here are plain elements, not text inputs, and a
-// keyboard user has no way to start a Shift+Arrow selection inside one
-// without a prior click. What keyboard users get instead, since anchoring
-// is block level anyway: Tab to any annotatable block/prompt/option and
-// press Enter to comment on the whole thing, no selection required. An
-// existing mark is itself a Tab stop; Enter opens it, Delete removes it.
+// Cmd+E, not a two-key sequence: the person asked for it directly, to
+// match their own editor binding. Cmd+E is not a character anyone types,
+// so it does not carry the "don't eat a keystroke out of someone's prose"
+// hazard the comma-based chord did — but isEditableTarget still earns its
+// place for two narrower reasons: (1) it stops a second popup from
+// stacking on top of itself when Cmd+E is pressed while the comment field
+// already has focus, and (2) it keeps behaviour sane inside an ordinary
+// answer field — without it, a stale `window.getSelection()` left over
+// from selecting text elsewhere on the page could otherwise resolve to a
+// valid annotation target even while someone is just typing an answer.
+export function isEditableTarget(target) {
+  if (!target) return false;
+  return target.isContentEditable === true || target.tagName === 'TEXTAREA' || target.tagName === 'INPUT';
+}
 
-if (typeof document !== 'undefined') {
-  highlightButton.addEventListener('click', () => commit(null));
-  commentButton.addEventListener('click', () => {
-    commentInput.hidden = false;
-    addCommentButton.hidden = false;
-    commentInput.focus();
-  });
-  addCommentButton.addEventListener('click', () => {
-    const comment = commentInput.value.trim();
-    commit(comment === '' ? null : comment);
-  });
-  commentInput.addEventListener('keydown', (event) => {
-    if (event.key === 'Escape') hideToolbar();
-  });
-  document.addEventListener('mousedown', (event) => {
-    if (!toolbar.hidden && !toolbar.contains(event.target)) hideToolbar();
-  });
-
-  document.addEventListener('mouseup', () => {
-    const selection = window.getSelection();
-    if (!selection || selection.isCollapsed || selection.rangeCount === 0) return;
+function annotateFromShortcut() {
+  const selection = window.getSelection();
+  if (selection && !selection.isCollapsed && selection.rangeCount > 0) {
     const range = selection.getRangeAt(0);
     const startTarget = resolveTarget(range.startContainer);
     const endTarget = resolveTarget(range.endContainer);
-    if (!startTarget || !endTarget || keyString(startTarget.key) !== keyString(endTarget.key)) return;
-    const start = offsetInRoot(startTarget.root, range.startContainer, range.startOffset);
-    const end = offsetInRoot(startTarget.root, range.endContainer, range.endOffset);
-    if (start === null || end === null) return;
-    const [lo, hi] = start <= end ? [start, end] : [end, start];
-    if (lo === hi) return;
-    openCreate(startTarget.key, startTarget.root, lo, hi, range.getBoundingClientRect());
+    if (startTarget && endTarget && keyString(startTarget.key) === keyString(endTarget.key)) {
+      const start = offsetInRoot(startTarget.root, range.startContainer, range.startOffset);
+      const end = offsetInRoot(startTarget.root, range.endContainer, range.endOffset);
+      if (start !== null && end !== null) {
+        const [lo, hi] = start <= end ? [start, end] : [end, start];
+        if (lo !== hi) {
+          openCreatePopup(startTarget.key, lo, hi, range.getBoundingClientRect());
+          return;
+        }
+      }
+    }
+  }
+  // No usable selection: fall back to the focused block/prompt/option, the
+  // whole-block keyboard path from the first version, now reached the same
+  // way as a selection instead of a separate Enter binding.
+  const el = document.activeElement;
+  if (el instanceof Element && el.classList.contains('annotatable')) {
+    const target = resolveTarget(el);
+    if (target) {
+      const text = targets.get(keyString(target.key)).text;
+      openCreatePopup(target.key, 0, text.length, el.getBoundingClientRect());
+    }
+  }
+}
+
+if (typeof document !== 'undefined') {
+  commentInput.addEventListener('keydown', (event) => {
+    // stopPropagation, not just preventDefault: app.js has its own
+    // document-level Cmd/Ctrl+Enter listener for advancing/submitting the
+    // question flow, and it must never see this keystroke while the
+    // comment field has focus. Attaching directly to the field (rather
+    // than relying on listener registration order at the document level)
+    // is what guarantees that regardless of which module's listener was
+    // registered first.
+    if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') {
+      event.preventDefault();
+      event.stopPropagation();
+      save();
+      return;
+    }
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      event.stopPropagation();
+      hidePopup();
+    }
+  });
+  document.addEventListener('mousedown', (event) => {
+    if (!popup.hidden && !popup.contains(event.target)) hidePopup();
+  });
+
+  // Clicking an existing mark opens the same edit popup the side panel
+  // uses, pre-filled — a person reading back over marked-up text expects
+  // clicking the highlight to show them what they wrote, the same way a
+  // native comment/annotation UI would.
+  document.addEventListener('click', (event) => {
+    const mark = event.target instanceof Element ? event.target.closest('mark.annotation-mark') : null;
+    if (!mark) return;
+    const target = resolveTarget(mark);
+    if (!target) return;
+    openEditPopup(target.key, Number(mark.dataset.annotationIndex));
   });
 
   document.addEventListener('keydown', (event) => {
     const el = document.activeElement;
-    if (!(el instanceof Element)) return;
-    if (el.classList.contains('annotation-mark')) {
+
+    // Acting on an existing mark via the keyboard: Delete/Backspace
+    // removes it (Enter/click opening it is handled above and by the
+    // panel; both removal paths — this one and the panel's Remove button —
+    // are kept on purpose).
+    if (el instanceof Element && el.classList.contains('annotation-mark')) {
       if (event.key === 'Delete' || event.key === 'Backspace') {
         event.preventDefault();
         const target = resolveTarget(el);
         if (!target) return;
         removeRange(target.key, Number(el.dataset.annotationIndex));
         targets.get(keyString(target.key)).reset();
+        notifyChanged();
       }
       return;
     }
-    if (el.classList.contains('annotatable') && event.key === 'Enter' && !event.repeat) {
-      event.preventDefault();
-      const target = resolveTarget(el);
-      if (!target) return;
-      const text = targets.get(keyString(target.key)).text;
-      openCreate(target.key, target.root, 0, text.length, el.getBoundingClientRect());
-    }
+
+    if (!(event.metaKey || event.ctrlKey) || event.key.toLowerCase() !== 'e') return;
+    // Chrome and Safari bind Cmd/Ctrl+E to "use selection for find" —
+    // without this, the browser's own default fires alongside (or instead
+    // of) this handler's. Always prevented, even when nothing below ends
+    // up opening a popup, so the browser default never sneaks through.
+    event.preventDefault();
+    if (isEditableTarget(event.target)) return; // already in the comment field, or an ordinary answer field — see the module comment above.
+    annotateFromShortcut();
   });
+}
+
+// --- The side panel's view of existing annotations -----------------------------
+
+/**
+ * Every stored comment, in an app.js-friendly shape: the structured key
+ * (so app.js can label it and switch to the right document/question view),
+ * its index within that key (needed for edit/remove/jump), the comment
+ * text, and the highlighted text it applies to.
+ *
+ * @returns {{key: string[], index: number, comment: string, highlight: string}[]}
+ */
+export function listAnnotations() {
+  const entries = [];
+  for (const [keyStr, ranges] of store) {
+    const target = targets.get(keyStr);
+    if (!target) continue;
+    ranges.forEach((range, index) => {
+      entries.push({ key: target.key, index, comment: range.comment, highlight: target.text.slice(range.start, range.end) });
+    });
+  }
+  return entries;
+}
+
+export function removeAnnotation(key, index) {
+  removeRange(key, index);
+  targets.get(keyString(key))?.reset();
+  notifyChanged();
+}
+
+/**
+ * Scrolls a comment's mark into view and focuses it, if it is currently
+ * rendered (the caller — app.js — is responsible for first switching to
+ * the right document tab or question view, since this module does not
+ * know about either).
+ *
+ * @param {string[]} key
+ * @param {number} index
+ * @returns {boolean} Whether a mark was found and focused.
+ */
+export function scrollToAnnotation(key, index) {
+  const el = blockElements.get(keyString(key));
+  const mark = el?.querySelector(`mark.annotation-mark[data-annotation-index="${index}"]`);
+  if (!mark) return false;
+  mark.scrollIntoView({ block: 'center', behavior: 'smooth' });
+  mark.focus();
+  return true;
 }
 
 // --- Assembling the result -----------------------------
@@ -417,12 +603,13 @@ export function buildAnnotationsPayload() {
 
 /**
  * Pure, DOM-free assembly of the `annotations` result: every leaf is the
- * block's/prompt's/option's own text with CriticMarkup markers spliced in
- * around each highlighted range, so a comment always arrives together with
- * the text it applies to. Ranges are applied right to left (descending
- * `start`) because, unlike the DOM wrapping above, each `insertAnnotation`
- * call lengthens the string — inserting the rightmost range first keeps
- * every earlier offset valid for the next call.
+ * block's/prompt's/option's own text with a CriticMarkup highlight and
+ * comment spliced in around each annotated range, so a comment always
+ * arrives together with the text it applies to. Ranges are applied right
+ * to left (descending `start`) because, unlike the DOM wrapping above,
+ * each `insertAnnotation` call lengthens the string — inserting the
+ * rightmost range first keeps every earlier offset valid for the next
+ * call.
  *
  * Accumulates through Maps and converts with `Object.fromEntries` at the
  * end, the same pattern lib/contract.js uses for the same reason: a

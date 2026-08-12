@@ -13,6 +13,8 @@ h2 { margin-top: 0; font-size: 1.1rem; }
 .asker-label { font-weight: 700; }
 .asker-path { max-width: 100%; padding: 3px 6px; border-radius: 4px; background: #e8eeeb; color: #263630; cursor: copy; overflow-wrap: anywhere; }
 .asker-tmux-window { padding: 3px 6px; border-radius: 4px; background: #f1f8f5; color: #355147; overflow-wrap: anywhere; }
+.annotate-hint { margin: 10px 0 0; color: #7c8985; font-size: .8rem; }
+.annotate-hint kbd { padding: 1px 5px; border: 1px solid #d5dfda; border-radius: 4px; background: #f4f6f5; font: inherit; font-size: .76rem; }
 .message { max-width: 62ch; margin-bottom: 0; color: #4d5a5a; line-height: 1.55; }
 .message > :first-child { margin-top: 18px; }
 .message > :last-child { margin-bottom: 0; }
@@ -70,19 +72,61 @@ button.secondary { background: #e8eeeb; color: #263630; }
 .document-content pre { overflow-x: auto; padding: 12px; border-radius: 6px; background: #f0f3f1; }
 .document-content a { color: #1e6652; }
 .empty-documents { color: #64716d; }
-.annotatable { border-radius: 3px; transition: box-shadow .12s; }
-.annotatable:focus-visible { outline: 3px solid #9bcebc; outline-offset: 2px; }
+/* An annotatable block/prompt/option gets no visual treatment of its own —
+   only a focus ring, so keyboard users can see where "," "m" will act.
+   Nothing marks it as annotatable at rest; the affordance is the shortcut
+   hint in the panel toggle and empty-state text, not extra chrome on every
+   paragraph. */
+.annotatable:focus-visible { outline: 2px solid #9bcebc; outline-offset: 2px; border-radius: 3px; }
 .prompt-text { cursor: text; }
-.annotation-mark { padding: 0 1px; border-radius: 2px; background: #fdea9b; color: inherit; cursor: pointer; }
-.annotation-mark.has-comment { background: #fdea9b; box-shadow: inset 0 -2px 0 #c99a2e; }
+
+/* Subtle on purpose: an underline in the form's own accent color, not a
+   solid highlighter block. Every mark carries a comment now, so there is
+   no separate "has a comment" variant to distinguish. */
+.annotation-mark { border-radius: 2px; background: rgb(39 103 85 / 10%); box-shadow: inset 0 -2px 0 rgb(39 103 85 / 55%); color: inherit; cursor: pointer; }
 .annotation-mark:focus-visible { outline: 2px solid #9bcebc; outline-offset: 1px; }
-.annotation-toolbar { position: fixed; z-index: 20; display: flex; align-items: center; gap: 6px; padding: 6px; border: 1px solid #d5dfda; border-radius: 8px; background: #fff; box-shadow: 0 4px 14px rgb(23 32 39 / 16%); }
-.annotation-toolbar button { padding: 6px 10px; font-size: .84rem; }
-.annotation-toolbar textarea { width: 220px; padding: 6px; border: 1px solid #bfcac5; border-radius: 6px; font: inherit; font-size: .84rem; }
-.annotation-status { color: #9d3d2d; font-size: .8rem; }
+
+.annotation-popup { position: fixed; z-index: 30; width: 220px; padding: 8px; border: 1px solid #d5dfda; border-radius: 8px; background: #fff; }
+/* Never set `display` unconditionally on a selector combined with the
+   `hidden` attribute elsewhere: a class rule and `[hidden]` are equal
+   specificity, so the class wins the cascade tie and the browser's default
+   `[hidden] { display: none }` is silently defeated, leaving the element
+   visible. Scoping `display` to `:not([hidden])` avoids that regardless of
+   what else targets this selector. */
+.annotation-popup:not([hidden]) { display: block; }
+.annotation-popup textarea { width: 100%; padding: 6px; border: 1px solid #bfcac5; border-radius: 6px; font: inherit; font-size: .84rem; }
+.annotation-popup-hint { margin-top: 5px; color: #7c8985; font-size: .74rem; }
+.annotation-status { margin-top: 4px; color: #9d3d2d; font-size: .8rem; }
+
+/* Lives inside .questions-pane in the markup, not .layout — it is not a
+   grid item and cannot affect where .questions-pane or .documents-pane
+   land, at any viewport width. `display: block` plus `width: fit-content`
+   is what lets `margin-left: auto` push it to the pane's right edge (an
+   inline-level box, which a <button> is by default, ignores auto margins);
+   `position: sticky` then keeps it at that corner as the pane's own
+   `overflow-y: auto` scrolls, the same way it stayed visible before. */
+.annotation-panel-toggle { display: block; width: fit-content; position: sticky; top: 14px; margin: 14px 0 20px auto; z-index: 25; padding: 8px 12px; background: #e8eeeb; color: #263630; font-size: .85rem; }
+.annotation-panel-toggle:hover:not(:disabled) { filter: none; background: #dde7e2; }
+.annotation-panel { position: fixed; inset: 0 auto 0 0; z-index: 26; display: flex; flex-direction: column; width: min(360px, 90vw); background: #fff; border-right: 1px solid #d5dfda; transform: translateX(-100%); transition: transform .18s ease; }
+.annotation-panel.open { transform: translateX(0); }
+.annotation-panel-header { display: flex; align-items: center; justify-content: space-between; padding: 16px 18px; border-bottom: 1px solid #e2e8e5; }
+.annotation-panel-header h2 { margin: 0; font-size: 1rem; }
+#annotation-panel-close { padding: 4px 9px; background: transparent; color: #53625d; font-size: 1.1rem; line-height: 1; }
+#annotation-panel-close:hover:not(:disabled) { filter: none; background: #e8eeeb; }
+#annotation-panel-list { flex: 1 1 auto; overflow-y: auto; padding: 8px 18px 18px; }
+.annotation-panel-empty { color: #64716d; font-size: .9rem; }
+.annotation-entry { padding: 12px 0; border-top: 1px solid #e2e8e5; }
+.annotation-entry:first-child { border-top: 0; }
+.annotation-entry-location { margin: 0 0 4px; color: #467267; font-size: .72rem; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; }
+.annotation-entry-highlight { margin: 0 0 4px; color: #53625d; font-size: .84rem; font-style: italic; overflow-wrap: anywhere; }
+.annotation-entry-comment { margin: 0; font-size: .9rem; overflow-wrap: anywhere; }
+.annotation-entry-actions { display: flex; gap: 6px; margin-top: 8px; }
+.annotation-entry-actions button { padding: 5px 9px; background: #e8eeeb; color: #355147; font-size: .78rem; }
+.annotation-entry-actions button:hover:not(:disabled) { filter: none; background: #dde7e2; }
+
 .review-annotations { margin-top: 22px; padding-top: 16px; border-top: 1px solid #e2e8e5; }
 .review-annotation { margin: 10px 0; }
-.annotation-text { white-space: pre-wrap; padding: 8px 10px; border-radius: 6px; background: #fdf6d8; font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: .82rem; }
+.annotation-text { white-space: pre-wrap; padding: 8px 10px; border-radius: 6px; background: #f6f8f7; font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: .82rem; }
 @media (max-width: 800px) {
   .layout { display: block; height: auto; overflow: visible; }
   .questions-pane { overflow: visible; }

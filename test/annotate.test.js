@@ -5,33 +5,55 @@ import test from 'node:test';
 // See test-helpers/vendorLoader.mjs for why this redirect is needed to
 // import web/annotate.js from Node at all.
 register('../test-helpers/vendorLoader.mjs', import.meta.url);
-const { assembleAnnotations, firstOccurrenceOnly, unsafeDelimiterReason } = await import('../web/annotate.js');
+const { isEditableTarget, assembleAnnotations, firstOccurrenceOnly, unsafeCommentReason, unsafeHighlightReason } = await import('../web/annotate.js');
 
-// --- unsafeDelimiterReason: refusing markup that cannot round-trip -----------------------------
+// --- unsafeHighlightReason / unsafeCommentReason: refusing markup that cannot round-trip -----------------------------
 // CriticMarkup has no escape mechanism (see the criticmarkup README): this
 // is the client-side half of the fix for text/comments containing a
 // delimiter the server-side round-trip check (lib/contract.js) would
-// otherwise reject with no indication of which mark caused it.
+// otherwise reject with no indication of which mark caused it. Split into
+// two functions (rather than one taking both strings) because since every
+// annotation now carries a comment, the highlight is only ever checked
+// once, at creation, while the comment is checked on both creation and
+// edit — an edit never re-validates the highlight, since it did not change.
 
-test('unsafeDelimiterReason allows ordinary highlights and comments', () => {
-  assert.equal(unsafeDelimiterReason('ordinary text', null), null);
-  assert.equal(unsafeDelimiterReason('ordinary text', 'an ordinary comment'), null);
+test('unsafeHighlightReason allows ordinary text', () => {
+  assert.equal(unsafeHighlightReason('ordinary text'), null);
 });
 
-test('unsafeDelimiterReason refuses a highlight containing the highlight terminator', () => {
-  const reason = unsafeDelimiterReason('a highlight containing ==} right there', null);
+test('unsafeHighlightReason refuses text containing the highlight terminator', () => {
+  const reason = unsafeHighlightReason('a highlight containing ==} right there');
   assert.match(reason, /==\}/);
 });
 
-test('unsafeDelimiterReason refuses a comment containing the comment terminator', () => {
-  const reason = unsafeDelimiterReason('ordinary text', 'a comment containing <<} right there');
+test('unsafeCommentReason allows an ordinary comment', () => {
+  assert.equal(unsafeCommentReason('an ordinary comment'), null);
+});
+
+test('unsafeCommentReason refuses a comment containing the comment terminator', () => {
+  const reason = unsafeCommentReason('a comment containing <<} right there');
   assert.match(reason, /<<\}/);
 });
 
-test('unsafeDelimiterReason ignores a comment terminator inside the comment when comment is null', () => {
-  // Only the highlight is being created (the "Highlight" button, not
-  // "Comment") — there is no comment to check yet.
-  assert.equal(unsafeDelimiterReason('ordinary text', null), null);
+// --- isEditableTarget: the Cmd/Ctrl+E guard -----------------------------
+// Cmd+E is not a character anyone types, so this no longer exists to avoid
+// eating a keystroke — it exists so the shortcut does not stack a second
+// popup when the comment field already has focus, and stays inert in an
+// ordinary answer field rather than acting on a stale window selection.
+
+test('isEditableTarget recognizes textareas and inputs as editable', () => {
+  assert.equal(isEditableTarget({ tagName: 'TEXTAREA' }), true);
+  assert.equal(isEditableTarget({ tagName: 'INPUT' }), true);
+});
+
+test('isEditableTarget recognizes a contenteditable element as editable', () => {
+  assert.equal(isEditableTarget({ tagName: 'DIV', isContentEditable: true }), true);
+});
+
+test('isEditableTarget treats an ordinary block/button/null target as not editable', () => {
+  assert.equal(isEditableTarget({ tagName: 'P' }), false);
+  assert.equal(isEditableTarget({ tagName: 'BUTTON' }), false);
+  assert.equal(isEditableTarget(null), false);
 });
 
 // --- firstOccurrenceOnly: deduplicating a container/child sharing a block id -----------------------------
@@ -64,6 +86,13 @@ test('firstOccurrenceOnly keeps unrelated ids interleaved with a duplicate pair'
 function target(key, text) {
   return [JSON.stringify(key), { key, text }];
 }
+
+// A stored range's `comment` is always a non-empty string in normal use
+// now (the interface no longer offers a highlight-only action, and the
+// popup refuses to save an empty comment) — but assembleAnnotations()
+// itself stays generic over `comment: string|null`, matching what
+// criticmarkup's own insertAnnotation accepts, rather than encoding a UI
+// rule into the data layer. These fixtures exercise both.
 
 test('assembleAnnotations builds the nested result shape for all four surfaces', () => {
   const targets = new Map([
