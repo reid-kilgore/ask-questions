@@ -205,3 +205,43 @@ test('preserves a __proto__ document id as an own keyed entry', () => {
   assert.equal(Object.hasOwn(result.documents, '__proto__'), true);
   assert.deepEqual(result.documents.__proto__, { '0-1': '{==x==}' });
 });
+
+test('accepts a quiz question and normalises correct/answer/disagree', () => {
+  const quizPayload = {
+    version: 1,
+    questions: [{
+      id: 'quiz-1',
+      prompt: 'Pick the right one',
+      type: 'quiz',
+      answer: 'a',
+      why: 'Because the spec says so',
+      cite: 'Section 2.1',
+      options: [{ value: 'a', label: 'A' }, { value: 'b', label: 'B' }],
+    }],
+  };
+  validatePayload(quizPayload);
+  assert.equal(quizPayload.questions[0].allowDisagree, true);
+  assert.equal(quizPayload.questions[0].allowOther, undefined);
+
+  const correct = validateAnswers(quizPayload, [{ questionId: 'quiz-1', value: 'a', notes: '', disagree: false }]);
+  assert.deepEqual(correct['quiz-1'], { value: 'a', notes: '', correct: true, answer: 'a', disagree: false });
+
+  const wrong = validateAnswers(quizPayload, [{ questionId: 'quiz-1', value: 'b', notes: 'I disagree', disagree: true }]);
+  assert.deepEqual(wrong['quiz-1'], { value: 'b', notes: 'I disagree', correct: false, answer: 'a', disagree: true });
+});
+
+test('rejects a quiz answer that is not one of the question\'s option values', () => {
+  const quizPayload = {
+    version: 1,
+    questions: [{ id: 'quiz-1', prompt: 'Pick', type: 'quiz', answer: 'not-an-option', options: [{ value: 'a', label: 'A' }] }],
+  };
+  assert.throws(() => validatePayload(quizPayload), ContractError);
+});
+
+test('rejects allowOther on a quiz question', () => {
+  const quizPayload = {
+    version: 1,
+    questions: [{ id: 'quiz-1', prompt: 'Pick', type: 'quiz', answer: 'a', allowOther: true, options: [{ value: 'a', label: 'A' }] }],
+  };
+  assert.throws(() => validatePayload(quizPayload), ContractError);
+});
