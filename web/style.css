@@ -176,14 +176,44 @@ button.primary { background: #276755; color: #fff; }
 .quiz-score-block { margin: 8px 0; padding: 8px; border-radius: 6px; background: #fff; }
 .quiz-score-text { width: 100%; margin-top: 10px; padding: 10px; border: 1px solid #d5dfda; border-radius: 6px; background: #fff; font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: .8rem; white-space: pre-wrap; }
 
+@media (min-width: 801px) and (max-width: 1024px) {
+  /* Keep the 60px rail + hover/pin overlay working unchanged down to
+     1024px (per spec). The only intermediate-width adjustment is capping
+     the documents pane so a wide stored/dragged width (up to 720px, see
+     app.js paneWidthKey) can't push main-column content into negative
+     space and force horizontal page scroll. */
+  .documents-pane { max-width: min(320px, 40vw); }
+}
+
 @media (max-width: 800px) {
   .app-shell { flex-direction: column; height: auto; overflow: visible; }
   .rail { width: 100%; flex: 0 0 auto; }
   .rail-items { width: 100%; flex-direction: row; overflow-x: auto; }
+  /* The desktop hover/pin overlay (see rules above) makes .rail-items
+     position: absolute, which pulls it out of normal flow. In this
+     column-direction mobile layout .rail's height comes only from
+     in-flow content (align-items: stretch only affects the cross axis
+     here), so with rail-items removed from flow .rail collapses toward
+     0 height and the header above/below it jumps and overlaps. Hover
+     doesn't exist on touch anyway, so just neutralize the overlay here
+     — the horizontal strip of marks is the mobile nav on its own
+     (clicking/tapping a mark already navigates, see buildRail() in
+     app.js) and .rail-legend (keyboard-shortcut hints) isn't relevant
+     on a touch device. */
+  .rail:hover .rail-items, .rail.pinned .rail-items {
+    position: static;
+    width: 100%;
+    box-shadow: none;
+  }
+  .rail-legend { display: none !important; }
   .main-column { height: auto; overflow: visible; }
   .content-row { flex-direction: column; }
   .questions-pane { overflow: visible; }
   .documents-pane { position: static; width: auto !important; height: auto; min-height: 45vh; border-top: 1px solid #dbe2df; border-left: 0; overflow: visible; }
+  /* Collapsed by default at this width (see docPaneOpen in app.js) so it
+     doesn't permanently eat ~45vh of a phone-sized screen; the toggle
+     button adds/removes this class via applyDocPaneWidth(). */
+  .documents-pane.collapsed { display: none; }
   .documents-pane-resizer { display: none; }
   #documents { height: auto; }
   .document-content { max-height: 55vh; }

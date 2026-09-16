@@ -608,11 +608,19 @@ const documentsResizer = document.querySelector('#documents-pane-resizer');
 const documentsContainer = document.querySelector('#documents');
 const paneWidthKey = `askq-docpane-width:${session.askerPath}`;
 let docPaneWidth = Number(localStorage.getItem(paneWidthKey)) || 360;
-let docPaneOpen = true;
+// Narrow/mobile layout stacks the documents pane under the questions pane
+// (see the max-width: 800px block in style.css) — default it collapsed
+// there so it doesn't permanently eat ~45vh of a phone-sized screen. Still
+// user-togglable afterward via the existing #documents-toggle button.
+let docPaneOpen = window.innerWidth > 800;
 let activeDocTabId = hasContext ? 'context' : (session.documents[0]?.id ?? null);
 
 function applyDocPaneWidth() {
   documentsPane.style.width = docPaneOpen ? `${Math.min(Math.max(docPaneWidth, 260), 720)}px` : '34px';
+  // .documents-pane.collapsed is what actually hides the pane at mobile
+  // widths (see style.css) — the mobile layout forces width:auto so the
+  // inline 34px/open-width style above has no effect there on its own.
+  documentsPane.classList.toggle('collapsed', !docPaneOpen);
   documentsToggle.ariaExpanded = String(docPaneOpen);
 }
 
