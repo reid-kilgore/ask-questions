@@ -588,9 +588,14 @@ test('interface source keeps rail navigation, safe review rendering, and Other i
   assert.match(app, /copyJsonButton\.hidden = !isReview/);
 
   // Keyboard map: ⌘\ is deliberately not bound (1Password conflict); digits
-  // only select answers when focus is outside a text field.
+  // only select answers when focus is outside a text field. Cmd/Ctrl+Enter
+  // is a global shortcut (works even from inside a text field) — it uses
+  // its own isTypingTarget helper, narrower than annotate.js's
+  // isEditableTarget, so that focusing a question's own radio/checkbox
+  // answer input doesn't block navigation.
   assert.doesNotMatch(app, /key === '\\\\'/);
-  assert.match(app, /isEditableTarget\(document\.activeElement\)/);
+  assert.match(app, /function isTypingTarget\(target\)/);
+  assert.match(app, /isTypingTarget\(document\.activeElement\)/);
   assert.match(app, /\/\^\[1-9\]\$\//);
   assert.match(app, /event\.repeat/);
   assert.match(app, /event\.metaKey \|\| event\.ctrlKey/);
