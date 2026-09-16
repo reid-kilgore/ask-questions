@@ -14,5 +14,8 @@
   "dependencies": {
     "criticmarkup": "file:../criticmarkup",
     "markdown-it": "^14.1.0"
+  },
+  "devDependencies": {
+    "playwright": "^1.63.0"
   }
 }

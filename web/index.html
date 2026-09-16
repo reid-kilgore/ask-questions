@@ -14,45 +14,68 @@
       </header>
       <div id="annotation-panel-list"></div>
     </aside>
-    <main class="layout">
-      <section class="questions-pane" aria-labelledby="page-title">
-        <!-- Not a grid item: it lives inside .questions-pane, not .layout,
-             so it cannot affect where that pane or .documents-pane land.
-             See .annotation-panel-toggle in style.css. -->
-        <button type="button" id="annotation-panel-toggle" class="annotation-panel-toggle" aria-expanded="false" aria-controls="annotation-panel">Comments <span id="annotation-count">0</span></button>
-        <header class="page-header"><p class="eyebrow">Input needed</p><h1 id="page-title">Questions</h1><div class="asker-context"><span class="asker-label">Asked from</span><code id="asker-path" class="asker-path"></code><span id="asker-tmux-window" class="asker-tmux-window" hidden></span></div><p class="annotate-hint">Select text, or focus a block, and press <kbd>Cmd/Ctrl+E</kbd> to comment on it.</p><div id="message" class="message" hidden></div></header>
-        <form id="question-form" novalidate>
-          <div class="view-toolbar" role="group" aria-label="Question view">
-            <span class="view-label">View</span>
-            <button type="button" id="all-questions" class="view-button active" aria-pressed="true">All questions</button>
-            <button type="button" id="focused-question" class="view-button" aria-pressed="false">Focus mode</button>
-            <span id="focus-progress" class="focus-progress">All questions visible</span>
-            <span id="shortcut-hint" class="shortcut-hint" hidden></span>
+    <div class="app-shell">
+      <nav id="rail" class="rail" aria-label="Questions" hidden>
+        <div id="rail-items" class="rail-items"></div>
+        <div class="rail-legend">
+          <span><kbd>⌘⏎</kbd> Next/Submit</span>
+          <span><kbd>⌘⌫</kbd> Back</span>
+          <span><kbd>1-9</kbd> Select answer</span>
+          <span><kbd>⌘0</kbd> Context</span>
+        </div>
+      </nav>
+      <div class="main-column">
+        <header class="app-header">
+          <h1 id="page-title" class="app-title">Questions</h1>
+          <div class="header-chips">
+            <code id="asker-path" class="asker-path" title="Click to copy"></code>
+            <span id="asker-tmux-window" class="asker-tmux-window" hidden></span>
           </div>
-          <div id="summary" class="summary" role="alert" hidden></div>
-          <div id="questions" class="question-stage"></div>
-          <section id="review" class="review-card" aria-labelledby="review-title" hidden>
-            <p class="eyebrow">Final step</p>
-            <h2 id="review-title">Review your answers</h2>
-            <p class="review-message">Check each answer and note before you submit.</p>
-            <div id="review-summary"></div>
-            <p id="copy-status" class="copy-status" role="status" aria-live="polite" hidden></p>
+          <div class="header-actions">
+            <button type="button" id="documents-toggle" class="icon-button" aria-expanded="false" aria-controls="documents-pane" title="Toggle supporting documents" hidden>▤</button>
+            <button type="button" id="annotation-panel-toggle" class="annotation-panel-toggle" aria-expanded="false" aria-controls="annotation-panel">Comments <span id="annotation-count">0</span></button>
+          </div>
+        </header>
+        <div class="content-row">
+          <section class="questions-pane" aria-labelledby="page-title">
+            <p class="annotate-hint">Select text, or focus a block, and press <kbd>Cmd/Ctrl+E</kbd> to comment on it.</p>
+            <div id="summary" class="summary" role="alert" hidden></div>
+            <section id="context-screen" class="context-screen" hidden>
+              <p class="eyebrow">Context</p>
+              <div id="context-message" class="message"></div>
+              <button type="button" id="start-questions" class="primary">Start with question 1</button>
+            </section>
+            <form id="question-form" novalidate>
+              <div id="questions" class="question-stage"></div>
+              <section id="review" class="review-card" aria-labelledby="review-title" hidden>
+                <p class="eyebrow">Final step</p>
+                <h2 id="review-title">Review your answers</h2>
+                <p class="review-message">Check each answer and note before you submit.</p>
+                <div id="quiz-score" class="quiz-score" hidden></div>
+                <div id="review-summary"></div>
+                <p id="copy-status" class="copy-status" role="status" aria-live="polite" hidden></p>
+              </section>
+              <footer class="actions">
+                <button type="button" id="previous-question" class="secondary" hidden>Previous</button>
+                <button type="button" id="cancel" class="secondary">Cancel</button>
+                <button type="button" id="copy-quiz-summary" class="secondary" hidden>Copy quiz summary</button>
+                <button type="button" id="copy-json" class="secondary" hidden>Copy as JSON</button>
+                <button type="button" id="next-question" hidden>Next</button>
+                <button type="submit">Submit answers</button>
+              </footer>
+            </form>
+            <section id="completion" class="completion" role="status" aria-live="polite" hidden>
+              <p id="completion-title" class="completion-title"></p>
+              <p id="completion-detail">You can close this tab.</p>
+            </section>
           </section>
-          <footer class="actions">
-            <button type="button" id="previous-question" class="secondary" hidden>Previous</button>
-            <button type="button" id="cancel" class="secondary">Cancel</button>
-            <button type="button" id="copy-json" class="secondary" hidden>Copy as JSON</button>
-            <button type="button" id="next-question" hidden>Next</button>
-            <button type="submit">Submit answers</button>
-          </footer>
-        </form>
-        <section id="completion" class="completion" role="status" aria-live="polite" hidden>
-          <p id="completion-title" class="completion-title"></p>
-          <p id="completion-detail">You can close this tab.</p>
-        </section>
-      </section>
-      <aside class="documents-pane" aria-label="Supporting documents"><div id="documents"></div></aside>
-    </main>
+          <aside id="documents-pane" class="documents-pane" aria-label="Supporting documents" hidden>
+            <div id="documents-pane-resizer" class="documents-pane-resizer"></div>
+            <div id="documents"></div>
+          </aside>
+        </div>
+      </div>
+    </div>
     <script type="module" src="app.js"></script>
   </body>
 </html>
