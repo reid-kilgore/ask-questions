@@ -145,6 +145,52 @@ async function captureCmdEnterFix(browser, url) {
   }
 }
 
+// Proves the trailing-slash redirect fix in bin/ask-questions.js. index.html
+// links its assets with relative paths (href="style.css", src="app.js"),
+// resolved by the browser against the page's own final URL — so if the
+// browser is ever at exactly `/${token}` (no trailing slash) when it
+// resolves those, it requests `/style.css`/`/app.js` at the origin root and
+// they 404 under the server's prefix check, and the page renders completely
+// unstyled with no visible error. The server already prints/opens the
+// slash-terminated form, so this checks both: (1) the URL exactly as
+// printed to stderr — verbatim, not reconstructed — still works (regression
+// guard on the normal path), and (2) the same URL with its trailing slash
+// stripped — the exact broken scenario reported — now 302s to the
+// slash-terminated form and the stylesheet still loads. ".app-shell"'s
+// `display` is `flex` only via style.css (a bare <div> defaults to
+// `block`), so it's a reliable, hard-to-fake signal that the CSS applied,
+// rather than just checking requests didn't 404.
+async function assertStylesheetLoaded(page, label) {
+  const display = await page.evaluate(() => getComputedStyle(document.querySelector('.app-shell')).display);
+  if (display !== 'flex') throw new Error(`${label}: expected .app-shell to have display:flex (style.css loaded), got "${display}"`);
+  console.log(`${label}: OK (.app-shell display: ${display}, page URL: ${page.url()})`);
+}
+
+async function captureTrailingSlashFix(browser, printedUrl) {
+  const context = await browser.newContext();
+  const page = await context.newPage();
+  try {
+    // (1) The exact URL the CLI printed to stderr, unmodified — already
+    // slash-terminated, must keep working.
+    await page.goto(printedUrl);
+    await page.waitForTimeout(300);
+    await assertStylesheetLoaded(page, 'with trailing slash (as printed)');
+
+    // (2) The same URL with the trailing slash stripped — the exact bug
+    // report's scenario. A real browser follows the 302 automatically; we
+    // then confirm it landed back on the slash-terminated URL and the
+    // stylesheet loaded there too.
+    const noSlashUrl = printedUrl.replace(/\/$/, '');
+    await page.goto(noSlashUrl);
+    await page.waitForTimeout(300);
+    if (!page.url().endsWith('/')) throw new Error(`expected the no-trailing-slash URL to redirect to a slash-terminated URL, landed on ${page.url()}`);
+    await assertStylesheetLoaded(page, 'without trailing slash (redirected)');
+  } finally {
+    await page.close();
+    await context.close();
+  }
+}
+
 async function main() {
   await mkdir(shotsDir, { recursive: true });
 
@@ -165,6 +211,9 @@ async function main() {
   const requestExit = new Promise((res) => requestChild.once('exit', res));
   console.log('Capturing Cmd+Enter fix proof...');
   await captureCmdEnterFix(browser, requestUrl);
+
+  console.log('Checking trailing-slash redirect / stylesheet-load fix...');
+  await captureTrailingSlashFix(browser, quizUrl);
 
   await browser.close();
   quizChild.kill();

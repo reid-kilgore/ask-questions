@@ -373,6 +373,24 @@ async function serve(payload, documents, messageHtml, messageBlockText, anchors,
     const prefix = `/${token}`;
     try {
       if (!pathname.startsWith(prefix)) return send(response, 404, 'text/plain; charset=utf-8', 'Not found');
+      // index.html links its own assets with relative paths (href="style.css",
+      // src="app.js"), which the browser resolves against the page's own
+      // final URL. The URL this process prints/opens already has a trailing
+      // slash (see the `url` built below), but something downstream — an
+      // address-bar paste, macOS `open` normalization, a hand-edited URL —
+      // can still land the browser on exactly `/${token}` with no trailing
+      // slash. Serving index.html there anyway (the `|| '/'` fallback below
+      // would otherwise do that) silently breaks every relative asset:
+      // "style.css" resolves to `/style.css` at the origin root instead of
+      // `/${token}/style.css`, which 404s under this same prefix check, and
+      // the page renders completely unstyled with no visible error. Redirect
+      // to the slash-terminated form first so relative resolution is always
+      // correct.
+      if (pathname === prefix) {
+        response.writeHead(302, { Location: `${prefix}/`, 'Cache-Control': 'no-store' });
+        response.end();
+        return;
+      }
       const suffix = pathname.slice(prefix.length) || '/';
       if (request.method === 'GET' && suffix === '/') return send(response, 200, 'text/html; charset=utf-8', index);
       if (request.method === 'GET' && suffix === '/app.js') return send(response, 200, 'application/javascript; charset=utf-8', app);
