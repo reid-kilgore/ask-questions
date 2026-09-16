@@ -80,15 +80,19 @@ Payload schema (version must be 1):
       {
         "id": "unique non-empty string",
         "prompt": "non-empty string",
-        "type": "single" | "multiple" | "text",
+        "type": "single" | "multiple" | "text" | "quiz",
         "required": true | false,                 // optional, defaults to false
-        "options": [{                              // required for single and multiple only
+        "options": [{                              // required for single, multiple, and quiz
           "value": "unique non-empty string",
           "label": "non-empty string",
           "description": "optional string"
         }],
-        "allowOther": true | false,                // optional; choice questions only; defaults to true. Set false to turn Other off.
-        "placeholder": "optional string"          // optional; text and Other inputs
+        "allowOther": true | false,                // optional; single/multiple only; defaults to true. Set false to turn Other off. Invalid on quiz.
+        "placeholder": "optional string",         // optional; text and Other inputs
+        "answer": "option value",                 // quiz only; required; must equal one of this question's option values
+        "why": "optional string",                 // quiz only; shown after the person answers
+        "cite": "optional string",                // quiz only; shown after the person answers, as the spec sentence the answer rests on
+        "allowDisagree": true | false             // quiz only; optional, defaults to true; shows an "I disagree with the spec here" toggle
       }
     ],
     "documents": [{                                // optional
@@ -122,6 +126,17 @@ Lifecycle and output:
   values (a single optional choice can be null). Submitted answers are keyed by question id and
   contain value and notes only. Every submitted answer must include a notes string. The Notes
   field in the user interface is optional and sends an empty string when blank.
+  Quiz questions are the one exception: their answer entry is
+  {"value":"...","notes":"...","correct":true|false,"answer":"...","disagree":true|false} --
+  value is the chosen option's value (or null), correct compares it to the question's own
+  answer, answer echoes the question's answer so the caller does not need to re-read the
+  original payload, and disagree reports whether the person flagged the spec's answer as
+  wrong (their disagree note is carried in notes). When the payload has at least one quiz
+  question, the submitted result also carries a top-level score field:
+  "score":{"right":N,"wrong":N,"disagree":N,"total":N} -- right/wrong partition all quiz
+  questions on correct, disagree counts quiz answers with disagree:true regardless of
+  correctness, and total is the number of quiz questions in the payload. A payload with no
+  quiz questions never gets a score field.
   askerPath is always derived from the command current working directory. Payload JSON cannot set or override askerPath.
   The page shows it as Asked from. When the command starts in tmux, it also
   makes a best-effort, short lookup of the current tmux window name. If found, askerTmuxWindow is
@@ -372,8 +387,19 @@ async function serve(payload, documents, messageHtml, messageBlockText, anchors,
         const body = await requestBody(request);
         const answers = validateAnswers(payload, body.answers);
         const annotations = validateAnnotations(payload, anchors, body.annotations);
+        const quizAnswers = payload.questions
+          .filter((question) => question.type === 'quiz')
+          .map((question) => answers[question.id]);
+        const score = quizAnswers.length
+          ? {
+            right: quizAnswers.filter((answer) => answer.correct).length,
+            wrong: quizAnswers.filter((answer) => !answer.correct).length,
+            disagree: quizAnswers.filter((answer) => answer.disagree).length,
+            total: quizAnswers.length,
+          }
+          : undefined;
         send(response, 200, 'application/json; charset=utf-8', JSON.stringify({ ok: true }));
-        completeOnce({ version: 1, status: 'submitted', ...metadata, answers, annotations, submittedAt: new Date().toISOString() });
+        completeOnce({ version: 1, status: 'submitted', ...metadata, answers, annotations, ...(score ? { score } : {}), submittedAt: new Date().toISOString() });
         return;
       }
       if (request.method === 'POST' && suffix === '/api/cancel') {

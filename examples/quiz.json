@@ -1,0 +1,97 @@
+{
+  "version": 1,
+  "title": "Reports spec teach-back",
+  "message": "This quiz checks your understanding of the **REPORTS-RANGE-SPEC.md** decisions before you touch the reports code path. Answer each question, then read the reveal — it shows the spec sentence your answer rests on.\n\nWhen you disagree with what the spec says, use the disagree toggle on that question and explain why in the notes field. That note becomes part of the submitted result.",
+  "questions": [
+    {
+      "id": "range-cap",
+      "prompt": "A manager sets the ad hoc start and end dates so the range is exactly 366 calendar days inclusive. What happens?",
+      "type": "quiz",
+      "required": true,
+      "options": [
+        { "value": "a", "label": "Accepted client-side, but refused server-side because the true cap is 365 days." },
+        { "value": "b", "label": "Accepted on both sides. 366 is exactly at the cap; a 367-day range would be refused on both sides." },
+        { "value": "c", "label": "Accepted client-side but refused server-side, since the client is intentionally looser for a smoother UX." },
+        { "value": "d", "label": "Refused everywhere. A custom range beyond one pay period must go through the full builder, not the picker." }
+      ],
+      "answer": "b",
+      "why": "REPORT_RANGE_MAX_DAYS = 366 is one exact predicate imported by both the client input and validateStructural on the server. Tests pin 366 accepted and 367 refused on both sides.",
+      "cite": "REPORTS-RANGE-SPEC.md, D1: \"REPORT_RANGE_MAX_DAYS = 366 ... tests pin 366 accepted and 367 refused on both sides.\""
+    },
+    {
+      "id": "client-refusal",
+      "prompt": "The operator edits the end date so the range would be 400 days. What does the date input do?",
+      "type": "quiz",
+      "required": true,
+      "options": [
+        { "value": "a", "label": "It clamps the date down to the nearest value that fits under the cap." },
+        { "value": "b", "label": "The Run button disables, but the invalid date stays showing in the input." },
+        { "value": "c", "label": "The old value stays in the input, a reason shows underneath it, and nothing re-runs." },
+        { "value": "d", "label": "The report runs anyway and a coverage notice explains that part of the range was dropped." }
+      ],
+      "answer": "c",
+      "why": "D1 specifies the client behavior directly: a date input that would push rangeDayCount over 366, or set end before start, is refused. The old value stays, the reason shows under the input, and nothing re-runs.",
+      "cite": "REPORTS-RANGE-SPEC.md, D1, drill S4: \"the old value stays, the reason shows under the input, nothing re-runs.\""
+    },
+    {
+      "id": "validation-order",
+      "prompt": "A manager with no authorised locations sends a 400-day range request straight to the server. Which error comes back?",
+      "type": "quiz",
+      "required": true,
+      "options": [
+        { "value": "a", "label": "INVALID_RANGE, since the span cap is checked before anything else in the handler." },
+        { "value": "b", "label": "FORBIDDEN, since location authorization runs before the range cap is evaluated." },
+        { "value": "c", "label": "Both errors, combined in a single response." },
+        { "value": "d", "label": "A 200 with an empty result and a coverage notice covering the whole requested range." }
+      ],
+      "answer": "b",
+      "why": "INVALID_RANGE fires after location authorisation in the gauntlet, so a caller with no authorised locations gets FORBIDDEN first; the cap only guards the fact query, not the three checks that run before it.",
+      "cite": "REPORTS-RANGE-SPEC.md, D1: \"INVALID_RANGE fires after location authorisation, so a caller with no authorised locations gets FORBIDDEN first.\""
+    },
+    {
+      "id": "coverage-bounds",
+      "prompt": "Why does the coverage calculation compare exported lines against the query's own start/end calendar dates for every location, instead of computing each location's own local-midnight instants?",
+      "type": "quiz",
+      "required": true,
+      "options": [
+        { "value": "a", "label": "Because every Kronto company is assumed to share one timezone by policy." },
+        { "value": "b", "label": "Because a Prisma where clause can't express AT TIME ZONE, and for a day-grain column the fact query's per-location edges already round-trip to those same two calendar dates, so per-location instants would just invite a second, drift-prone derivation of the edges." },
+        { "value": "c", "label": "Because coverage runs entirely on the client after the fact query returns, so timezones don't apply." },
+        { "value": "d", "label": "Because the design review required per-location instants and this is a deliberate compromise on cost." }
+      ],
+      "answer": "b",
+      "why": "D2 chooses the query's own range.start/range.end on purpose: the fact query's per-location edges round-trip to exactly those two calendar dates for a day-grain column, and handing an implementer per-location instants invites the drift the PAS-5931 MUST-CHECK exists to prevent.",
+      "cite": "REPORTS-RANGE-SPEC.md, D2, and decision register: round 2 review, \"4 closed but over-built (per-location edges unnecessary...).\""
+    },
+    {
+      "id": "covered-meaning",
+      "prompt": "A location has one exported WORK line early in the day, and several more hours worked that day were never exported. Does the coverage notice flag that day for that location?",
+      "type": "quiz",
+      "required": true,
+      "options": [
+        { "value": "a", "label": "Yes. Coverage is per employee, so the un-exported hours for that person are flagged even though something exported." },
+        { "value": "b", "label": "No. Coverage is by day: any exported line on a day counts the whole day as covered, even when the export was only partial." },
+        { "value": "c", "label": "Yes, because PTO_ONLY and ADJUSTMENT lines are excluded from what counts as covered." },
+        { "value": "d", "label": "No, but only because supersedeOlderLines already removed the un-exported hours from the query entirely." }
+      ],
+      "answer": "b",
+      "why": "The spec states the limit explicitly in the notice copy itself and in D2: coverage is day-grained, not per employee, and a day with any exported line counts as covered, so a partly exported day can still show gaps.",
+      "cite": "REPORTS-RANGE-SPEC.md, D2: \"a day with any exported line counts as covered, so a partly exported day can still show gaps.\""
+    },
+    {
+      "id": "total-ot-scope",
+      "prompt": "The new Total OT column on the Payroll Report sums daily_ot_hours and weekly_ot_hours. What does it deliberately leave out, and why doesn't that make the column's label misleading?",
+      "type": "quiz",
+      "required": true,
+      "options": [
+        { "value": "a", "label": "Double OT hours. The product computes double OT nowhere today, so the label \"Total OT Hours (daily + weekly)\" states exactly what is summed." },
+        { "value": "b", "label": "Weekly OT for any straddling pay period. Those hours are silently dropped from the sum with no indication." },
+        { "value": "c", "label": "PTO and holiday hours, because those never count toward the overtime threshold under any configuration." },
+        { "value": "d", "label": "Pay amounts. The column is a dollar figure derived from the pay rate rather than a count of hours." }
+      ],
+      "answer": "a",
+      "why": "D3 is explicit: double OT is out because the product computes it nowhere (a literal zero, per PAS-5066), and the derived measure's label says exactly what is summed so nobody mistakes it for the payroll file's Total OT.",
+      "cite": "REPORTS-RANGE-SPEC.md, D3: \"Double OT is out (R6)... the label says what is summed so nobody reads it as the payroll file's Total OT.\""
+    }
+  ]
+}

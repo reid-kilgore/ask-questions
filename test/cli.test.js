@@ -72,8 +72,10 @@ test('help is a self-sufficient agent contract', async () => {
       'option descriptions, or a supporting Markdown document.',
       'Payload schema (version must be 1):',
       '"message": "optional non-empty Markdown string"',
-      '"type": "single" | "multiple" | "text"',
-      '"allowOther": true | false,                // optional; choice questions only; defaults to true. Set false to turn Other off.',
+      '"type": "single" | "multiple" | "text" | "quiz"',
+      '"allowOther": true | false,                // optional; single/multiple only; defaults to true. Set false to turn Other off. Invalid on quiz.',
+      '"answer": "option value",                 // quiz only; required; must equal one of this question\'s option values',
+      '"score":{"right":N,"wrong":N,"disagree":N,"total":N}',
       'Single and multiple-choice questions show an Other free-text option by default.',
       'Set "allowOther": false on a question to turn it off.',
       '"placeholder": "optional string"',
@@ -535,19 +537,36 @@ test('writes the session URL as an OSC 8 hyperlink when stderr is a terminal', (
   assert.ok(message.endsWith('\n'));
 });
 
-test('interface source keeps focus actions, safe review rendering, and Other input rules', async () => {
+test('interface source keeps rail navigation, safe review rendering, and Other input rules', async () => {
   const [index, app, style] = await Promise.all([
     readFile('web/index.html', 'utf8'),
     readFile('web/app.js', 'utf8'),
     readFile('web/style.css', 'utf8'),
   ]);
+  // Rail + context screen + documents-pane markup (Part 1: rail redesign).
+  assert.match(index, /id="rail"/);
+  assert.match(index, /id="rail-items"/);
+  assert.match(index, /id="context-screen"/);
+  assert.match(index, /id="context-message"/);
+  assert.match(index, /id="start-questions"/);
+  assert.match(index, /id="documents-toggle"/);
+  assert.match(index, /id="documents-pane-resizer"/);
   assert.match(index, /id="previous-question"/);
   assert.match(index, /id="next-question"/);
   assert.match(index, /id="review-summary"/);
   assert.match(index, /<button type="button" id="copy-json"/);
-  assert.match(app, /let focused = true;/, 'Focus mode must be the initial view.');
-  assert.match(app, /previousQuestion\.hidden = !focused/);
-  assert.match(app, /nextQuestion\.hidden = !focused \|\| reviewing/);
+  assert.match(index, /id="copy-quiz-summary"/);
+  assert.match(index, /id="quiz-score"/);
+  // The header never has a Submit button — review is the only place Submit lives.
+  const headerSection = index.match(/<header class="app-header">[\s\S]*?<\/header>/)[0];
+  assert.doesNotMatch(headerSection, /type="submit"/);
+
+  // Screen model replaces the old Focus/All toolbar and focused/reviewing booleans.
+  assert.match(app, /const screens = \[/);
+  assert.match(app, /function goToScreen\(index\)/);
+  assert.doesNotMatch(app, /let focused = true;/);
+  assert.doesNotMatch(app, /let reviewing = false;/);
+
   assert.match(app, /reviewSummary\.replaceChildren\(\)/);
   assert.match(app, /reviewSummary\.append\(item\)/);
   assert.doesNotMatch(app, /reviewSummary\.innerHTML/);
@@ -564,23 +583,28 @@ test('interface source keeps focus actions, safe review rendering, and Other inp
   assert.match(app, /status: 'submitted'/);
   assert.match(app, /submittedAt: new Date\(\)\.toISOString\(\)/);
   assert.match(app, /Object\.fromEntries\(answers\.map/);
-  assert.match(app, /return typeof value !== 'string' \|\| value\.trim\(\) === ''/);
   assert.match(app, /Copied JSON/);
   assert.match(app, /Could not copy JSON/);
-  assert.match(app, /copyJsonButton\.hidden = !reviewing/);
-  assert.match(style, /@media \(max-width: 1000px\)[\s\S]*\.actions #copy-json \{ grid-column: 2; grid-row: 1; \}/);
-  assert.match(index, /id="shortcut-hint"/);
+  assert.match(app, /copyJsonButton\.hidden = !isReview/);
+
+  // Keyboard map: ⌘\ is deliberately not bound (1Password conflict); digits
+  // only select answers when focus is outside a text field.
+  assert.doesNotMatch(app, /key === '\\\\'/);
+  assert.match(app, /isEditableTarget\(document\.activeElement\)/);
+  assert.match(app, /\/\^\[1-9\]\$\//);
+  assert.match(app, /event\.repeat/);
+  assert.match(app, /event\.metaKey \|\| event\.ctrlKey/);
+  assert.match(app, /if \(descriptor\.type === 'review'\) \{ if \(!submitButton\.disabled\) form\.requestSubmit\(\); \}/);
+
+  // Quiz mode: locks on pick, reveals why/cite, disagree toggle, score summary.
+  assert.match(app, /function renderQuizQuestion\(/);
+  assert.match(app, /quizState\.set\(question\.id/);
+  assert.match(app, /I disagree with the spec here/);
+  assert.match(app, /function renderQuizScore\(/);
+  assert.match(app, /correct: value === question\.answer, answer: question\.answer, disagree: disagree \?\? false/);
+
   assert.match(index, /id="asker-path"/);
   assert.match(app, /askerPath/);
   assert.match(app, /textContent = session\.askerPath/);
-  assert.match(app, /attachMessage\(message, session\.messageHtml, session\.messageBlockText\)/);
-  assert.match(app, /copy/);
-  assert.match(app, /event\.repeat/);
-  assert.match(app, /event\.metaKey \|\| event\.ctrlKey/);
-  assert.match(app, /if \(reviewing\) form\.requestSubmit\(\)/);
-  assert.match(app, /else nextQuestion\.click\(\)/);
-  const nextHandler = app.match(/nextQuestion\.addEventListener\('click', \(\) => \{([\s\S]*?)\n\}\);/);
-  assert.ok(nextHandler);
-  assert.doesNotMatch(nextHandler[1], /incompleteRequiredQuestions/);
-  assert.match(app, /focusedQuestionIndex = session\.questions\.indexOf\(missingQuestions\[0\]\)/);
+  assert.match(app, /attachMessage\(contextMessage, session\.messageHtml, session\.messageBlockText\)/);
 });

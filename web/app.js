@@ -1,4 +1,4 @@
-import { attachDocument, attachMessage, attachOption, attachPrompt, buildAnnotationsPayload, listAnnotations, onAnnotationsChanged, openEditPopup, removeAnnotation, scrollToAnnotation } from './annotate.js';
+import { attachDocument, attachMessage, attachOption, attachPrompt, buildAnnotationsPayload, isEditableTarget, listAnnotations, onAnnotationsChanged, openEditPopup, removeAnnotation, scrollToAnnotation } from './annotate.js';
 
 const session = await fetch('api/session').then(async (response) => {
   if (!response.ok) throw new Error('The local session is unavailable.');
@@ -15,19 +15,23 @@ const form = document.querySelector('#question-form');
 const questions = document.querySelector('#questions');
 const review = document.querySelector('#review');
 const reviewSummary = document.querySelector('#review-summary');
+const quizScoreEl = document.querySelector('#quiz-score');
 const summary = document.querySelector('#summary');
 const submitButton = form.querySelector('[type="submit"]');
 const cancelButton = document.querySelector('#cancel');
 const copyJsonButton = document.querySelector('#copy-json');
+const copyQuizSummaryButton = document.querySelector('#copy-quiz-summary');
 const copyStatus = document.querySelector('#copy-status');
 const previousQuestion = document.querySelector('#previous-question');
 const nextQuestion = document.querySelector('#next-question');
 const completion = document.querySelector('#completion');
+const contextScreen = document.querySelector('#context-screen');
+const contextMessage = document.querySelector('#context-message');
+const startQuestionsButton = document.querySelector('#start-questions');
 const cardsByQuestionId = new Map();
 const otherValueSynchronisers = [];
-let focused = true;
-let focusedQuestionIndex = 0;
-let reviewing = false;
+const quizState = new Map(); // questionId -> { value, correct, disagree }
+let lastQuizSummaryText = '';
 
 document.title = session.title || 'Questions';
 document.querySelector('#page-title').textContent = session.title || 'Questions';
@@ -40,10 +44,26 @@ if (session.askerTmuxWindow) {
   askerTmuxWindow.textContent = `tmux: ${session.askerTmuxWindow}`;
   askerTmuxWindow.hidden = false;
 }
-if (session.messageHtml) {
-  const message = document.querySelector('#message');
-  attachMessage(message, session.messageHtml, session.messageBlockText);
-  message.hidden = false;
+
+const hasContext = Boolean(session.messageHtml);
+if (hasContext) contextScreen.hidden = false; // shown/hidden per-screen below; default visible until first render
+
+// --- Screen model --------------------------------------------------------
+// A flat, ordered list of screens: an optional context screen, one screen
+// per question, then review. Both the rail and the prev/next footer walk
+// this same list, so there is exactly one source of truth for "where am I".
+const screens = [
+  ...(hasContext ? [{ type: 'context' }] : []),
+  ...session.questions.map((question, index) => ({ type: 'question', index })),
+  { type: 'review' },
+];
+let currentScreen = 0;
+const seenScreens = new Set();
+
+function isAnswered(question, answer) {
+  if (question.type === 'multiple') return answer.value.length > 0;
+  if (question.type === 'text') return typeof answer.value === 'string' && answer.value.trim() !== '';
+  return typeof answer.value === 'string' && answer.value.trim() !== '';
 }
 
 function addOption(card, question, option, questionIndex, optionIndex) {
@@ -97,6 +117,63 @@ function addOtherOption(card, question, questionIndex) {
   return synchronise;
 }
 
+// --- Quiz question type ---------------------------------------------------
+
+function renderQuizReveal(question, reveal, notesTextarea) {
+  reveal.replaceChildren();
+  reveal.hidden = false;
+  const state = quizState.get(question.id);
+  const correctOption = question.options.find((option) => option.value === question.answer);
+  const verdict = create('p', { className: `quiz-verdict ${state.correct ? 'correct' : 'incorrect'}` });
+  verdict.textContent = state.correct ? 'Correct.' : `Not quite — the spec says: ${correctOption?.label ?? question.answer}.`;
+  reveal.append(verdict);
+  if (question.why) reveal.append(create('p', { className: 'quiz-why', textContent: question.why }));
+  if (question.cite) reveal.append(create('p', { className: 'quiz-cite', textContent: `“${question.cite}”` }));
+  if (question.allowDisagree !== false) {
+    const toggle = create('button', { type: 'button', className: 'quiz-disagree-toggle', textContent: 'I disagree with the spec here' });
+    toggle.addEventListener('click', () => {
+      state.disagree = !state.disagree;
+      toggle.classList.toggle('active', state.disagree);
+      toggle.textContent = state.disagree ? 'Disagreeing with the spec' : 'I disagree with the spec here';
+      if (state.disagree) notesTextarea.focus();
+      updateRail();
+    });
+    reveal.append(toggle);
+  }
+}
+
+function renderQuizQuestion(card, question, questionIndex, notesTextarea) {
+  const optionsEl = create('div', { className: 'options' });
+  const reveal = create('div', { className: 'quiz-reveal', hidden: true });
+  question.options.forEach((option) => {
+    const button = create('button', { type: 'button', className: 'option quiz-option' });
+    const content = create('span');
+    content.append(create('strong', { textContent: option.label }));
+    if (option.description) {
+      const description = create('small');
+      content.append(description);
+      attachOption(description, question.id, option.value, option.description);
+    }
+    button.append(content);
+    button.addEventListener('click', () => {
+      if (quizState.has(question.id)) return;
+      const correct = option.value === question.answer;
+      quizState.set(question.id, { value: option.value, correct, disagree: false });
+      [...optionsEl.children].forEach((otherButton, index) => {
+        const candidate = question.options[index];
+        otherButton.classList.add('locked');
+        otherButton.disabled = true;
+        if (candidate.value === question.answer) otherButton.classList.add('correct');
+        else if (candidate.value === option.value) otherButton.classList.add('chosen-wrong');
+      });
+      renderQuizReveal(question, reveal, notesTextarea);
+      updateRail();
+    });
+    optionsEl.append(button);
+  });
+  card.append(optionsEl, reveal);
+}
+
 session.questions.forEach((question, questionIndex) => {
   const card = create('fieldset', { className: 'question-card' });
   cardsByQuestionId.set(question.id, card);
@@ -109,8 +186,18 @@ session.questions.forEach((question, questionIndex) => {
   }));
   card.append(legend);
 
+  const notesLabel = create('label', { className: 'notes-label', textContent: 'Notes for the agent' });
+  const notesTextarea = create('textarea', {
+    className: 'notes',
+    rows: 3,
+    placeholder: question.type === 'quiz' ? 'Optional context — this is where an "I disagree" note goes too' : 'Optional context, rationale, or follow-up',
+  });
+  notesLabel.append(notesTextarea);
+
   if (question.type === 'text') {
     card.append(create('textarea', { className: 'answer', rows: 4, placeholder: question.placeholder || '' }));
+  } else if (question.type === 'quiz') {
+    renderQuizQuestion(card, question, questionIndex, notesTextarea);
   } else {
     const options = create('div', { className: 'options' });
     question.options.forEach((option, optionIndex) => addOption(options, question, option, questionIndex, optionIndex));
@@ -118,63 +205,16 @@ session.questions.forEach((question, questionIndex) => {
     if (question.allowOther) otherValueSynchronisers.push(addOtherOption(card, question, questionIndex));
   }
 
-  const notesLabel = create('label', { className: 'notes-label', textContent: 'Notes for the agent' });
-  notesLabel.append(create('textarea', {
-    className: 'notes',
-    rows: 3,
-    placeholder: 'Optional context, rationale, or follow-up',
-  }));
   card.append(notesLabel);
   questions.append(card);
 });
 
-const allQuestionsButton = document.querySelector('#all-questions');
-const focusedQuestionButton = document.querySelector('#focused-question');
-const focusProgress = document.querySelector('#focus-progress');
-const shortcutHint = document.querySelector('#shortcut-hint');
-
-function updateQuestionView() {
-  questions.hidden = reviewing;
-  review.hidden = !reviewing;
-  questions.classList.toggle('focused-stage', focused && !reviewing);
-  session.questions.forEach((question, index) => {
-    cardsByQuestionId.get(question.id).hidden = focused && (reviewing || index !== focusedQuestionIndex);
-  });
-  allQuestionsButton.classList.toggle('active', !focused);
-  allQuestionsButton.ariaPressed = String(!focused);
-  focusedQuestionButton.classList.toggle('active', focused);
-  focusedQuestionButton.ariaPressed = String(focused);
-  previousQuestion.hidden = !focused;
-  nextQuestion.hidden = !focused || reviewing;
-  cancelButton.hidden = focused && !reviewing;
-  copyJsonButton.hidden = !reviewing;
-  submitButton.hidden = focused && !reviewing;
-  if (focused && !reviewing) {
-    focusProgress.textContent = `Question ${focusedQuestionIndex + 1} of ${session.questions.length}`;
-    shortcutHint.textContent = '⌘/Ctrl + Enter: Next';
-    shortcutHint.hidden = false;
-    previousQuestion.disabled = focusedQuestionIndex === 0;
-    nextQuestion.textContent = focusedQuestionIndex === session.questions.length - 1 ? 'Review answers' : 'Next';
-  } else if (reviewing) {
-    focusProgress.textContent = 'Review answers';
-    shortcutHint.textContent = '⌘/Ctrl + Enter: Submit';
-    shortcutHint.hidden = false;
-    previousQuestion.disabled = false;
-  } else {
-    focusProgress.textContent = 'All questions visible';
-    shortcutHint.hidden = true;
-  }
-}
-
-function showRequiredQuestions(requiredQuestions) {
-  if (requiredQuestions.length === 0) return true;
-  summary.textContent = `Complete required questions: ${requiredQuestions.map((question) => question.prompt).join('; ')}`;
-  summary.hidden = false;
-  return false;
-}
-
 function readAnswer(question) {
   const card = cardsByQuestionId.get(question.id);
+  if (question.type === 'quiz') {
+    const state = quizState.get(question.id);
+    return { questionId: question.id, value: state?.value ?? null, notes: card.querySelector('.notes').value, disagree: state?.disagree ?? false };
+  }
   let value;
   if (question.type === 'text') value = card.querySelector('.answer').value;
   else {
@@ -197,12 +237,19 @@ function incompleteRequiredQuestions(questionList, answers) {
     if (!question.required) return false;
     const value = answersByQuestionId.get(question.id).value;
     if (question.type === 'multiple') return value.length === 0;
-    if (question.type === 'single') return typeof value !== 'string' || value.trim() === '';
+    if (question.type === 'single' || question.type === 'quiz') return typeof value !== 'string' || value.trim() === '';
     return !value.trim();
   });
 }
 
-function displayAnswer(answer) {
+function displayAnswer(question, answer) {
+  if (question.type === 'quiz') {
+    if (answer.value === null) return 'No answer';
+    const state = quizState.get(question.id);
+    const parts = [state?.correct ? 'Correct' : 'Incorrect'];
+    if (state?.disagree) parts.push('disagreed');
+    return parts.join(' · ');
+  }
   if (answer.value === null || answer.value === '') return 'No answer';
   if (Array.isArray(answer.value)) return answer.value.length === 0 ? 'No answer' : answer.value.join(', ');
   return answer.value;
@@ -213,7 +260,7 @@ function displayAnswer(answer) {
 // panel, so the two never describe the same comment two different ways.
 function describeKey(key) {
   const [scope, ...rest] = key;
-  if (scope === 'message') return 'Message';
+  if (scope === 'message') return 'Context';
   if (scope === 'document') {
     const title = session.documents.find((item) => item.id === rest[0])?.title ?? rest[0];
     return `Document: ${title}`;
@@ -245,18 +292,73 @@ function annotationEntries() {
   return entries;
 }
 
+function hasQuizQuestions() {
+  return session.questions.some((question) => question.type === 'quiz');
+}
+
+function quizScoreData(answers) {
+  const quizAnswers = session.questions
+    .filter((question) => question.type === 'quiz')
+    .map((question) => {
+      const answer = answers.find((item) => item.questionId === question.id);
+      const state = quizState.get(question.id);
+      return { question, value: answer.value, correct: answer.value === question.answer, disagree: state?.disagree ?? false, notes: answer.notes };
+    });
+  const right = quizAnswers.filter((item) => item.correct).length;
+  const disagree = quizAnswers.filter((item) => item.disagree).length;
+  return { quizAnswers, right, wrong: quizAnswers.length - right, disagree, total: quizAnswers.length };
+}
+
+function renderQuizScore(answers) {
+  if (!hasQuizQuestions()) { quizScoreEl.hidden = true; lastQuizSummaryText = ''; return; }
+  quizScoreEl.hidden = false;
+  quizScoreEl.replaceChildren();
+  const { quizAnswers, right, wrong, disagree, total } = quizScoreData(answers);
+  quizScoreEl.append(create('p', { className: 'quiz-score-line', textContent: `Quiz score: ${right}/${total} correct, ${wrong} wrong, ${disagree} disagreed` }));
+  const lines = [`Quiz results — ${right}/${total} correct, ${wrong} wrong, ${disagree} disagreed`, ''];
+  const problems = quizAnswers.filter((item) => !item.correct || item.disagree);
+  if (problems.length === 0) {
+    const okLine = 'Everything matched the spec and nothing was disagreed with.';
+    quizScoreEl.append(create('p', { textContent: okLine }));
+    lines.push(okLine);
+  } else {
+    problems.forEach(({ question, value, correct, disagree: disagreed, notes }) => {
+      const yourAnswer = question.options.find((option) => option.value === value)?.label ?? 'No answer';
+      const specAnswer = question.options.find((option) => option.value === question.answer)?.label ?? question.answer;
+      const summaryLine = `Your answer: ${yourAnswer}${correct ? '' : ` — spec: ${specAnswer}`}${disagreed ? ' (disagreed)' : ''}`;
+      const block = create('div', { className: 'quiz-score-block' });
+      block.append(create('p', { textContent: question.prompt }));
+      block.append(create('p', { textContent: summaryLine }));
+      if (notes) block.append(create('p', { textContent: `Note: ${notes}` }));
+      quizScoreEl.append(block);
+      lines.push(question.prompt, summaryLine);
+      if (notes) lines.push(`Note: ${notes}`);
+      lines.push('');
+    });
+  }
+  lastQuizSummaryText = lines.join('\n').trim();
+  const textBlock = create('textarea', {
+    className: 'quiz-score-text',
+    readOnly: true,
+    rows: Math.min(18, lines.length + 2),
+    value: lastQuizSummaryText,
+  });
+  quizScoreEl.append(textBlock);
+}
+
 function renderReview() {
   reviewSummary.replaceChildren();
   copyStatus.hidden = true;
   const answers = readAnswers();
   const answersByQuestionId = new Map(answers.map((answer) => [answer.questionId, answer]));
+  renderQuizScore(answers);
   session.questions.forEach((question, index) => {
     const answer = answersByQuestionId.get(question.id);
     const item = create('article', { className: 'review-item' });
     item.append(create('h3', { textContent: `Question ${index + 1}` }));
     item.append(create('p', { className: 'review-prompt', textContent: question.prompt }));
     const answerLabel = create('p', { className: 'review-label', textContent: 'Answer' });
-    const answerValue = create('p', { className: 'review-value', textContent: displayAnswer(answer) });
+    const answerValue = create('p', { className: 'review-value', textContent: displayAnswer(question, answer) });
     const notesLabel = create('p', { className: 'review-label', textContent: 'Notes' });
     const notesValue = create('p', { className: 'review-value', textContent: answer.notes || 'No notes' });
     item.append(answerLabel, answerValue, notesLabel, notesValue);
@@ -282,7 +384,11 @@ function buildCopiedResult(answers) {
     status: 'submitted',
     askerPath: session.askerPath,
     ...(session.askerTmuxWindow ? { askerTmuxWindow: session.askerTmuxWindow } : {}),
-    answers: Object.fromEntries(answers.map(({ questionId, value, notes }) => [questionId, { value, notes }])),
+    answers: Object.fromEntries(answers.map(({ questionId, value, notes, disagree }) => {
+      const question = session.questions.find((item) => item.id === questionId);
+      if (question.type === 'quiz') return [questionId, { value, notes, correct: value === question.answer, answer: question.answer, disagree: disagree ?? false }];
+      return [questionId, { value, notes }];
+    })),
     annotations: buildAnnotationsPayload(),
     submittedAt: new Date().toISOString(),
   };
@@ -317,87 +423,272 @@ function answersForFinalAction() {
   const answers = readAnswers();
   const missingQuestions = incompleteRequiredQuestions(session.questions, answers);
   if (showRequiredQuestions(missingQuestions)) return answers;
-  if (focused && reviewing) {
-    reviewing = false;
-    focusedQuestionIndex = session.questions.indexOf(missingQuestions[0]);
-    updateQuestionView();
+  if (screens[currentScreen].type === 'review') {
+    const target = screens.findIndex((screenItem) => screenItem.type === 'question' && session.questions[screenItem.index].id === missingQuestions[0].id);
+    if (target !== -1) goToScreen(target);
   }
   return undefined;
 }
 
-allQuestionsButton.addEventListener('click', () => {
-  focused = false;
-  reviewing = false;
-  summary.hidden = true;
-  updateQuestionView();
-});
-focusedQuestionButton.addEventListener('click', () => {
-  focused = true;
-  reviewing = false;
-  summary.hidden = true;
-  updateQuestionView();
-});
-previousQuestion.addEventListener('click', () => {
-  summary.hidden = true;
-  if (reviewing) reviewing = false;
-  else if (focusedQuestionIndex > 0) focusedQuestionIndex -= 1;
-  updateQuestionView();
-});
-nextQuestion.addEventListener('click', () => {
-  summary.hidden = true;
-  if (focusedQuestionIndex === session.questions.length - 1) {
-    reviewing = true;
-    renderReview();
-  } else {
-    focusedQuestionIndex += 1;
+function showRequiredQuestions(requiredQuestions) {
+  if (requiredQuestions.length === 0) return true;
+  summary.textContent = `Complete required questions: ${requiredQuestions.map((question) => question.prompt).join('; ')}`;
+  summary.hidden = false;
+  return false;
+}
+
+// --- Screen navigation, rail, footer --------------------------------------
+
+const rail = document.querySelector('#rail');
+const railItems = document.querySelector('#rail-items');
+
+function railMark(descriptor, index) {
+  if (descriptor.type === 'context') return '0';
+  if (descriptor.type === 'review') return 'R';
+  return String(descriptor.index + 1);
+}
+
+function railTitle(descriptor) {
+  if (descriptor.type === 'context') return 'Context';
+  if (descriptor.type === 'review') return 'Review';
+  const question = session.questions[descriptor.index];
+  return question.prompt.length > 40 ? `${question.prompt.slice(0, 37)}…` : question.prompt;
+}
+
+function questionRailState(question) {
+  const seen = seenScreens.has(question.id);
+  const answer = readAnswer(question);
+  if (question.type === 'quiz') {
+    const state = quizState.get(question.id);
+    if (state) {
+      if (state.disagree) return 'amber';
+      return state.correct ? 'answered' : 'wrong';
+    }
+  } else if (isAnswered(question, answer)) {
+    return 'answered';
   }
-  updateQuestionView();
-});
-updateQuestionView();
+  if (seen && question.required) return 'skipped-required';
+  if (seen) return 'seen';
+  return 'todo';
+}
+
+function railState(descriptor, index) {
+  if (index === currentScreen) return 'current';
+  if (descriptor.type === 'context') return seenScreens.has('context') ? 'seen' : 'todo';
+  if (descriptor.type === 'review') return seenScreens.has('review') ? 'seen' : 'todo';
+  return questionRailState(session.questions[descriptor.index]);
+}
+
+function railStatusLine(descriptor) {
+  if (descriptor.type === 'context') return seenScreens.has('context') ? 'Read' : 'Not read yet';
+  if (descriptor.type === 'review') return 'Final step';
+  const question = session.questions[descriptor.index];
+  const state = questionRailState(question);
+  return { current: 'Current', answered: 'Answered', wrong: 'Answered — incorrect', amber: 'Disagreed', 'skipped-required': 'Required — not answered', seen: 'Seen', todo: 'Not seen' }[state] ?? '';
+}
+
+let railButtons = [];
+function buildRail() {
+  railItems.replaceChildren();
+  railButtons = screens.map((descriptor, index) => {
+    const button = create('button', { type: 'button', className: 'rail-item' });
+    const mark = create('span', { className: 'rail-mark', textContent: railMark(descriptor, index) });
+    const detail = create('span', { className: 'rail-detail' });
+    detail.append(create('span', { className: 'rail-title', textContent: railTitle(descriptor) }));
+    detail.append(create('span', { className: 'rail-status' }));
+    button.append(mark, detail);
+    button.addEventListener('click', () => goToScreen(index));
+    railItems.append(button);
+    return button;
+  });
+  rail.hidden = session.questions.length <= 1;
+}
+
+function updateRail() {
+  screens.forEach((descriptor, index) => {
+    const button = railButtons[index];
+    const state = railState(descriptor, index);
+    button.className = `rail-item state-${state}`;
+    button.querySelector('.rail-status').textContent = railStatusLine(descriptor);
+  });
+}
+
+function updateFooter() {
+  const descriptor = screens[currentScreen];
+  const isContext = descriptor.type === 'context';
+  const isReview = descriptor.type === 'review';
+  previousQuestion.hidden = currentScreen === 0;
+  previousQuestion.disabled = currentScreen === 0;
+  nextQuestion.hidden = isContext || isReview;
+  if (!isContext && !isReview) nextQuestion.textContent = descriptor.index === session.questions.length - 1 ? 'Review answers' : 'Next';
+  submitButton.hidden = !isReview;
+  copyJsonButton.hidden = !isReview;
+  copyQuizSummaryButton.hidden = !isReview || !hasQuizQuestions();
+}
+
+function updateView() {
+  const descriptor = screens[currentScreen];
+  contextScreen.hidden = descriptor.type !== 'context';
+  questions.hidden = descriptor.type !== 'question';
+  review.hidden = descriptor.type !== 'review';
+  if (descriptor.type === 'question') {
+    session.questions.forEach((question, index) => {
+      cardsByQuestionId.get(question.id).hidden = index !== descriptor.index;
+    });
+  }
+  if (descriptor.type === 'review') renderReview();
+  updateFooter();
+  renderDocumentsPane();
+  updateRail();
+}
+
+function goToScreen(index) {
+  if (index < 0 || index >= screens.length) return;
+  summary.hidden = true;
+  currentScreen = index;
+  const descriptor = screens[index];
+  seenScreens.add(descriptor.type === 'question' ? session.questions[descriptor.index].id : descriptor.type);
+  updateView();
+}
+
+buildRail();
+
+startQuestionsButton.textContent = session.questions.length === 1 ? 'Go to the question' : 'Start with question 1';
+startQuestionsButton.addEventListener('click', () => goToScreen(hasContext ? 1 : 0));
+
+previousQuestion.addEventListener('click', () => goToScreen(currentScreen - 1));
+nextQuestion.addEventListener('click', () => goToScreen(currentScreen + 1));
+
+function selectNthOption(n) {
+  const descriptor = screens[currentScreen];
+  if (descriptor.type !== 'question') return;
+  const question = session.questions[descriptor.index];
+  if (question.type === 'text') return;
+  const card = cardsByQuestionId.get(question.id);
+  if (question.type === 'quiz') {
+    const buttons = [...card.querySelectorAll('.quiz-option')];
+    buttons[n]?.click();
+  } else {
+    const inputs = [...card.querySelectorAll('.option input')];
+    inputs[n]?.click();
+  }
+}
 
 document.addEventListener('keydown', (event) => {
-  if (!focused || form.hidden || event.repeat || !(event.metaKey || event.ctrlKey) || event.key !== 'Enter') return;
-  if (reviewing && submitButton.disabled) return;
-  if (!reviewing && nextQuestion.disabled) return;
-  event.preventDefault();
-  if (reviewing) form.requestSubmit();
-  else nextQuestion.click();
+  if (event.key === 'Escape') {
+    if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
+    return;
+  }
+  if (isEditableTarget(document.activeElement)) return;
+  if (event.metaKey || event.ctrlKey) {
+    if (event.repeat) return;
+    if (event.key === 'Enter') {
+      event.preventDefault();
+      const descriptor = screens[currentScreen];
+      if (descriptor.type === 'review') { if (!submitButton.disabled) form.requestSubmit(); }
+      else if (descriptor.type === 'context') startQuestionsButton.click();
+      else if (!nextQuestion.hidden) nextQuestion.click();
+    } else if (event.key === 'Backspace') {
+      event.preventDefault();
+      goToScreen(currentScreen - 1);
+    } else if (event.key === '0') {
+      event.preventDefault();
+      if (hasContext) goToScreen(0);
+    }
+    return;
+  }
+  if (/^[1-9]$/.test(event.key)) selectNthOption(Number(event.key) - 1);
 });
 
-// Reassigned below when there are documents to show; jumpToAnnotation()
-// needs a way to switch tabs regardless, since a listed comment can belong
-// to a document that is not the one currently selected.
-let selectDocument = () => {};
+// --- Documents pane (Context tab + supporting documents) -------------------
 
-const documents = document.querySelector('#documents');
-if (session.documents.length === 0) {
-  const empty = create('div', { className: 'empty-documents' });
-  empty.append(create('h2', { textContent: 'Supporting documents' }));
-  empty.append(create('p', { textContent: 'No supporting documents were provided for this request.' }));
-  documents.append(empty);
-} else {
-  documents.append(create('h2', { textContent: 'Supporting documents' }));
+const documentsPane = document.querySelector('#documents-pane');
+const documentsToggle = document.querySelector('#documents-toggle');
+const documentsResizer = document.querySelector('#documents-pane-resizer');
+const documentsContainer = document.querySelector('#documents');
+const paneWidthKey = `askq-docpane-width:${session.askerPath}`;
+let docPaneWidth = Number(localStorage.getItem(paneWidthKey)) || 360;
+let docPaneOpen = true;
+let activeDocTabId = hasContext ? 'context' : (session.documents[0]?.id ?? null);
+
+function applyDocPaneWidth() {
+  documentsPane.style.width = docPaneOpen ? `${Math.min(Math.max(docPaneWidth, 260), 720)}px` : '34px';
+  documentsToggle.ariaExpanded = String(docPaneOpen);
+}
+
+documentsToggle.addEventListener('click', () => {
+  docPaneOpen = !docPaneOpen;
+  applyDocPaneWidth();
+});
+
+documentsResizer.addEventListener('mousedown', (event) => {
+  event.preventDefault();
+  const startX = event.clientX;
+  const startWidth = documentsPane.getBoundingClientRect().width;
+  const onMove = (moveEvent) => {
+    const width = Math.min(720, Math.max(34, startWidth - (moveEvent.clientX - startX)));
+    docPaneOpen = width > 34;
+    docPaneWidth = Math.max(width, 260);
+    documentsPane.style.width = `${Math.max(width, 34)}px`;
+  };
+  const onUp = () => {
+    document.removeEventListener('mousemove', onMove);
+    document.removeEventListener('mouseup', onUp);
+    localStorage.setItem(paneWidthKey, String(docPaneWidth));
+    applyDocPaneWidth();
+  };
+  document.addEventListener('mousemove', onMove);
+  document.addEventListener('mouseup', onUp);
+});
+
+function renderDocumentsPane() {
+  const onContextScreen = screens[currentScreen].type === 'context';
+  const tabs = [
+    ...(hasContext && !onContextScreen ? [{ id: 'context', title: 'Context' }] : []),
+    ...session.documents.map((documentItem) => ({ id: documentItem.id, title: documentItem.title })),
+  ];
+  if (tabs.length === 0) {
+    documentsPane.hidden = true;
+    documentsToggle.hidden = true;
+    return;
+  }
+  documentsToggle.hidden = false;
+  documentsPane.hidden = false;
+  applyDocPaneWidth();
+  if (!tabs.some((tab) => tab.id === activeDocTabId)) activeDocTabId = tabs[0].id;
+
+  documentsContainer.replaceChildren();
   const navigation = create('nav', { className: 'document-list', ariaLabel: 'Documents' });
   const content = create('article', { id: 'document-content', className: 'document-content' });
-  const buttonsByDocumentId = new Map();
+  const buttons = new Map();
   const select = (id) => {
-    const documentItem = session.documents.find((item) => item.id === id);
-    if (!documentItem) return;
-    attachDocument(content, documentItem);
-    buttonsByDocumentId.forEach((button, documentId) => button.classList.toggle('active', documentId === id));
+    activeDocTabId = id;
+    if (id === 'context') attachMessage(content, session.messageHtml, session.messageBlockText);
+    else attachDocument(content, session.documents.find((item) => item.id === id));
+    buttons.forEach((button, tabId) => button.classList.toggle('active', tabId === id));
     content.scrollTop = 0;
   };
-  selectDocument = select;
-  session.documents.forEach((documentItem, index) => {
-    const button = create('button', { type: 'button', textContent: documentItem.title });
-    button.classList.toggle('active', index === 0);
-    button.addEventListener('click', () => select(documentItem.id));
-    buttonsByDocumentId.set(documentItem.id, button);
+  tabs.forEach((tab) => {
+    const button = create('button', { type: 'button', textContent: tab.title });
+    button.addEventListener('click', () => select(tab.id));
+    buttons.set(tab.id, button);
     navigation.append(button);
   });
-  documents.append(navigation, content);
-  select(session.documents[0].id);
+  documentsContainer.append(navigation, content);
+  select(activeDocTabId);
+  selectDocument = (id) => { if (tabs.some((tab) => tab.id === id)) select(id); };
 }
+
+// Reassigned above; jumpToAnnotation() needs a way to switch tabs regardless
+// of which document/context tab is currently selected.
+let selectDocument = () => {};
+
+// Render the context screen's own copy of the message (separate DOM node
+// from the documents-pane Context tab — attachMessage only ever targets
+// whichever one is visible, see renderDocumentsPane above).
+if (hasContext) attachMessage(contextMessage, session.messageHtml, session.messageBlockText);
+
+goToScreen(currentScreen); // re-run now that renderDocumentsPane/selectDocument exist
 
 function setBusy(action) {
   form.querySelectorAll('button, input, textarea').forEach((control) => { control.disabled = true; });
@@ -410,11 +701,12 @@ function clearBusy() {
   otherValueSynchronisers.forEach((synchronise) => synchronise());
   submitButton.textContent = 'Submit answers';
   cancelButton.textContent = 'Cancel';
-  updateQuestionView();
+  updateView();
 }
 
 function showCompletion(title) {
   form.hidden = true;
+  contextScreen.hidden = true;
   completion.hidden = false;
   document.querySelector('#completion-title').textContent = title;
   window.setTimeout(() => window.close(), 500);
@@ -460,6 +752,16 @@ copyJsonButton.addEventListener('click', async () => {
   }
 });
 
+copyQuizSummaryButton.addEventListener('click', async () => {
+  copyStatus.hidden = false;
+  try {
+    await copyPlainText(lastQuizSummaryText);
+    copyStatus.textContent = 'Copied quiz summary.';
+  } catch (error) {
+    copyStatus.textContent = `Could not copy quiz summary: ${error.message}`;
+  }
+});
+
 cancelButton.addEventListener('click', async () => {
   await completeRequest('api/cancel', { method: 'POST' }, 'cancel', 'Cancelled. No answers were submitted.');
 });
@@ -484,8 +786,13 @@ function setPanelOpen(open) {
 
 function jumpToAnnotation(entry) {
   const [scope] = entry.key;
-  if (scope === 'document') selectDocument(entry.key[1]);
-  else if ((scope === 'prompt' || scope === 'option') && focused) allQuestionsButton.click();
+  if (scope === 'document') { selectDocument(entry.key[1]); }
+  else if (scope === 'message') { if (screens[currentScreen].type !== 'context') selectDocument('context'); }
+  else if (scope === 'prompt' || scope === 'option') {
+    const question = session.questions.find((item) => item.id === entry.key[1]);
+    const target = screens.findIndex((screenItem) => screenItem.type === 'question' && session.questions[screenItem.index].id === question?.id);
+    if (target !== -1) goToScreen(target);
+  }
   setPanelOpen(false);
   // The view switch above can replace the DOM the mark lives in; wait a
   // frame so scrollToAnnotation finds the freshly rendered element.
@@ -511,7 +818,12 @@ function renderAnnotationPanel() {
     const editButton = create('button', { type: 'button', textContent: 'Edit' });
     editButton.addEventListener('click', () => {
       if (entry.key[0] === 'document') selectDocument(entry.key[1]);
-      else if ((entry.key[0] === 'prompt' || entry.key[0] === 'option') && focused) allQuestionsButton.click();
+      else if (entry.key[0] === 'message') { if (screens[currentScreen].type !== 'context') selectDocument('context'); }
+      else if (entry.key[0] === 'prompt' || entry.key[0] === 'option') {
+        const question = session.questions.find((item) => item.id === entry.key[1]);
+        const target = screens.findIndex((screenItem) => screenItem.type === 'question' && session.questions[screenItem.index].id === question?.id);
+        if (target !== -1) goToScreen(target);
+      }
       setPanelOpen(false);
       requestAnimationFrame(() => openEditPopup(entry.key, entry.index));
     });
