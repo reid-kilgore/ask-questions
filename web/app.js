@@ -1,4 +1,4 @@
-import { attachDocument, attachMessage, attachOption, attachPrompt, buildAnnotationsPayload, isEditableTarget, listAnnotations, onAnnotationsChanged, openEditPopup, removeAnnotation, scrollToAnnotation } from './annotate.js';
+import { attachDocument, attachMessage, attachOption, attachPrompt, buildAnnotationsPayload, listAnnotations, onAnnotationsChanged, openEditPopup, removeAnnotation, scrollToAnnotation } from './annotate.js';
 
 const session = await fetch('api/session').then(async (response) => {
   if (!response.ok) throw new Error('The local session is unavailable.');
@@ -574,21 +574,46 @@ function selectNthOption(n) {
   }
 }
 
+// A narrower notion of "currently typing" than annotate.js's own
+// isEditableTarget: that helper treats every <input> — including a
+// question's own radio/checkbox answer inputs — as "editable", which is
+// right for annotate.js's Cmd/Ctrl+E shortcut (don't pop up an annotation
+// while a stale text selection is lingering) but wrong here. Clicking an
+// answer option moves keyboard focus onto its radio/checkbox input, so
+// reusing isEditableTarget as the guard for this whole keyboard-nav block
+// meant "choose an answer" -> "Cmd+Enter to advance" silently did nothing,
+// because isEditableTarget(radio-input) is true. Only genuine text-entry
+// targets should block navigation here.
+function isTypingTarget(target) {
+  if (!target) return false;
+  if (target.isContentEditable === true || target.tagName === 'TEXTAREA') return true;
+  if (target.tagName !== 'INPUT') return false;
+  const nonTextInputTypes = new Set(['radio', 'checkbox', 'button', 'submit', 'reset', 'file', 'range', 'color', 'image']);
+  return !nonTextInputTypes.has(target.type);
+}
+
 document.addEventListener('keydown', (event) => {
   if (event.key === 'Escape') {
     if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
     return;
   }
-  if (isEditableTarget(document.activeElement)) return;
   if (event.metaKey || event.ctrlKey) {
     if (event.repeat) return;
     if (event.key === 'Enter') {
+      // Advertised everywhere (rail-legend: "Cmd/Ctrl+Enter Next/Submit")
+      // as a global shortcut, so it deliberately is NOT guarded by
+      // isTypingTarget — it works even from inside the notes/other/text-
+      // question textareas. Escape already exists to blur a field first
+      // if that's what's wanted instead.
       event.preventDefault();
       const descriptor = screens[currentScreen];
       if (descriptor.type === 'review') { if (!submitButton.disabled) form.requestSubmit(); }
       else if (descriptor.type === 'context') startQuestionsButton.click();
       else if (!nextQuestion.hidden) nextQuestion.click();
-    } else if (event.key === 'Backspace') {
+      return;
+    }
+    if (isTypingTarget(document.activeElement)) return;
+    if (event.key === 'Backspace') {
       event.preventDefault();
       goToScreen(currentScreen - 1);
     } else if (event.key === '0') {
@@ -597,6 +622,7 @@ document.addEventListener('keydown', (event) => {
     }
     return;
   }
+  if (isTypingTarget(document.activeElement)) return;
   if (/^[1-9]$/.test(event.key)) selectNthOption(Number(event.key) - 1);
 });
 
@@ -608,11 +634,19 @@ const documentsResizer = document.querySelector('#documents-pane-resizer');
 const documentsContainer = document.querySelector('#documents');
 const paneWidthKey = `askq-docpane-width:${session.askerPath}`;
 let docPaneWidth = Number(localStorage.getItem(paneWidthKey)) || 360;
-let docPaneOpen = true;
+// Narrow/mobile layout stacks the documents pane under the questions pane
+// (see the max-width: 800px block in style.css) — default it collapsed
+// there so it doesn't permanently eat ~45vh of a phone-sized screen. Still
+// user-togglable afterward via the existing #documents-toggle button.
+let docPaneOpen = window.innerWidth > 800;
 let activeDocTabId = hasContext ? 'context' : (session.documents[0]?.id ?? null);
 
 function applyDocPaneWidth() {
   documentsPane.style.width = docPaneOpen ? `${Math.min(Math.max(docPaneWidth, 260), 720)}px` : '34px';
+  // .documents-pane.collapsed is what actually hides the pane at mobile
+  // widths (see style.css) — the mobile layout forces width:auto so the
+  // inline 34px/open-width style above has no effect there on its own.
+  documentsPane.classList.toggle('collapsed', !docPaneOpen);
   documentsToggle.ariaExpanded = String(docPaneOpen);
 }
 
