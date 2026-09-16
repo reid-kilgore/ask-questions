@@ -360,6 +360,42 @@ test('serves annotate.js and criticmarkup as importable ES modules, and criticma
   }
 });
 
+test('the session root without a trailing slash redirects to the slash-terminated URL, so relative asset paths still resolve', async () => {
+  // index.html links style.css/app.js with relative paths, resolved by the
+  // browser against the page's own final URL. Without this redirect,
+  // landing on exactly `/${token}` (no trailing slash) — e.g. from an
+  // address-bar paste or a stripped-slash `open` invocation — resolves
+  // "style.css" to `/style.css` at the origin root instead of
+  // `/${token}/style.css`, which 404s and renders the page unstyled with no
+  // visible error.
+  const input = JSON.stringify({ version: 1, questions: [{ id: 'stop', prompt: 'Continue?', type: 'text' }] });
+  const session = startCli(['--no-open', '--no-ding'], input);
+  try {
+    const url = await waitForUrl(session); // e.g. http://127.0.0.1:PORT/<token>/
+    assert.equal(url.at(-1), '/', 'sanity check: the URL this test starts from must be slash-terminated');
+    const noSlashUrl = url.slice(0, -1);
+
+    const manual = await fetch(noSlashUrl, { redirect: 'manual' });
+    assert.equal(manual.status, 302);
+    assert.equal(manual.headers.get('location'), new URL(url).pathname);
+
+    const followed = await fetch(noSlashUrl);
+    assert.equal(followed.status, 200);
+    assert.equal(followed.url, url);
+    assert.match(await followed.text(), /<div class="app-shell">/);
+
+    // The with-slash form (what the CLI actually prints/opens) must be
+    // unaffected by this change.
+    const direct = await fetch(url);
+    assert.equal(direct.status, 200);
+
+    await fetch(`${url}api/cancel`, { method: 'POST' });
+    await session.closed;
+  } finally {
+    await stopChild(session);
+  }
+});
+
 test('session shows the derived caller path and ignores a payload path', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'ask-questions-asker-'));
   const expectedAskerPath = await realpath(directory);
