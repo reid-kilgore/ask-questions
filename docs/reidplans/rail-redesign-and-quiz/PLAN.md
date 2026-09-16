@@ -24,4 +24,7 @@ Contract v2 / attachments (file upload). `version` stays 1.
 - Deviations from the brief, if any, recorded in the final report sent to the dispatcher.
 
 ## Status
-See final report to dispatcher for completion state, PR URL, and test output.
+Complete. PR: https://github.com/reid-kilgore/ask-questions/pull/1
+`npm test` 74/74 passing (one unrelated pre-existing tmux-window flake, reproducible on main).
+`npm run check` clean. Playwright proof run and screenshots captured under
+`docs/screenshots/quiz/`, `result.json` score `{"right":5,"wrong":1,"disagree":1,"total":6}`.
