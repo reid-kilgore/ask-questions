@@ -32,6 +32,13 @@ const cardsByQuestionId = new Map();
 const otherValueSynchronisers = [];
 const quizState = new Map(); // questionId -> { value, correct, disagree }
 let lastQuizSummaryText = '';
+// questionId -> { index, prompt, optionLabel, correct, correctLabel, why,
+// cite, disagree }, in answer order — the documents-pane "Quiz answers" log
+// (see recordQuizAnswer/renderQuizLog below). A Map so re-answering (the
+// disagree toggle is the only path today) updates the existing entry in
+// place instead of appending a duplicate: Map.set on an existing key does
+// not change its iteration position.
+const quizLogEntries = new Map();
 
 document.title = session.title || 'Questions';
 document.querySelector('#page-title').textContent = session.title || 'Questions';
@@ -119,7 +126,7 @@ function addOtherOption(card, question, questionIndex) {
 
 // --- Quiz question type ---------------------------------------------------
 
-function renderQuizReveal(question, reveal, notesTextarea) {
+function renderQuizReveal(question, reveal, notesTextarea, questionIndex) {
   reveal.replaceChildren();
   reveal.hidden = false;
   const state = quizState.get(question.id);
@@ -136,6 +143,7 @@ function renderQuizReveal(question, reveal, notesTextarea) {
       toggle.classList.toggle('active', state.disagree);
       toggle.textContent = state.disagree ? 'Disagreeing with the spec' : 'I disagree with the spec here';
       if (state.disagree) notesTextarea.focus();
+      recordQuizAnswer(question, questionIndex, state);
       updateRail();
     });
     reveal.append(toggle);
@@ -166,7 +174,8 @@ function renderQuizQuestion(card, question, questionIndex, notesTextarea) {
         if (candidate.value === question.answer) otherButton.classList.add('correct');
         else if (candidate.value === option.value) otherButton.classList.add('chosen-wrong');
       });
-      renderQuizReveal(question, reveal, notesTextarea);
+      renderQuizReveal(question, reveal, notesTextarea, questionIndex);
+      recordQuizAnswer(question, questionIndex, quizState.get(question.id));
       updateRail();
     });
     optionsEl.append(button);
@@ -632,6 +641,7 @@ const documentsPane = document.querySelector('#documents-pane');
 const documentsToggle = document.querySelector('#documents-toggle');
 const documentsResizer = document.querySelector('#documents-pane-resizer');
 const documentsContainer = document.querySelector('#documents');
+const quizLogEl = document.querySelector('#quiz-log');
 const paneWidthKey = `askq-docpane-width:${session.askerPath}`;
 let docPaneWidth = Number(localStorage.getItem(paneWidthKey)) || 360;
 // Narrow/mobile layout stacks the documents pane under the questions pane
@@ -640,6 +650,10 @@ let docPaneWidth = Number(localStorage.getItem(paneWidthKey)) || 360;
 // user-togglable afterward via the existing #documents-toggle button.
 let docPaneOpen = window.innerWidth > 800;
 let activeDocTabId = hasContext ? 'context' : (session.documents[0]?.id ?? null);
+// Whether the sidebar has already been auto-opened for a quiz reveal — only
+// the very first one does this (see recordQuizAnswer); after that the
+// person's own open/closed choice via #documents-toggle is left alone.
+let quizSidebarOpened = false;
 
 function applyDocPaneWidth() {
   documentsPane.style.width = docPaneOpen ? `${Math.min(Math.max(docPaneWidth, 260), 720)}px` : '34px';
@@ -675,13 +689,69 @@ documentsResizer.addEventListener('mousedown', (event) => {
   document.addEventListener('mouseup', onUp);
 });
 
+// A running, answer-order transcript of every quiz reveal, appended to the
+// documents-pane sidebar (not the review screen) — the point is a single
+// place to re-read every explanation after clicking through several
+// questions, while the inline reveal under each question (renderQuizReveal
+// above) stays exactly as it was. Called on the initial answer and again on
+// the disagree toggle; quizLogEntries is keyed by question id, so the
+// second call updates the existing entry in place rather than appending a
+// duplicate.
+function recordQuizAnswer(question, questionIndex, state) {
+  const chosenOption = question.options.find((option) => option.value === state.value);
+  const correctOption = question.options.find((option) => option.value === question.answer);
+  quizLogEntries.set(question.id, {
+    index: questionIndex,
+    prompt: question.prompt,
+    optionLabel: chosenOption?.label ?? state.value,
+    correct: state.correct,
+    correctLabel: correctOption?.label ?? question.answer,
+    why: question.why,
+    cite: question.cite,
+    disagree: state.disagree,
+  });
+  // Open the sidebar the first time any quiz answer lands, even if the
+  // payload carries no real documents — see the "hasAnything" gate in
+  // renderDocumentsPane below, which shows the pane for the quiz log alone.
+  if (!quizSidebarOpened) {
+    quizSidebarOpened = true;
+    docPaneOpen = true;
+  }
+  renderDocumentsPane();
+}
+
+function renderQuizLog() {
+  quizLogEl.replaceChildren();
+  if (quizLogEntries.size === 0) {
+    quizLogEl.hidden = true;
+    return;
+  }
+  quizLogEl.hidden = false;
+  quizLogEl.append(create('h2', { className: 'quiz-log-title', textContent: 'Quiz answers' }));
+  quizLogEntries.forEach((entry) => {
+    const item = create('article', { className: 'quiz-log-entry' });
+    item.append(create('p', { className: 'quiz-log-heading', textContent: `Question ${entry.index + 1}: ${entry.prompt}` }));
+    item.append(create('p', { className: 'quiz-log-answer', textContent: `Your answer: ${entry.optionLabel}` }));
+    item.append(create('p', {
+      className: `quiz-verdict ${entry.correct ? 'correct' : 'incorrect'}`,
+      textContent: entry.correct ? 'Correct.' : `Not quite — the spec says: ${entry.correctLabel}.`,
+    }));
+    if (entry.why) item.append(create('p', { className: 'quiz-why', textContent: entry.why }));
+    if (entry.cite) item.append(create('p', { className: 'quiz-cite', textContent: `“${entry.cite}”` }));
+    if (entry.disagree) item.append(create('p', { className: 'quiz-log-disagree', textContent: 'Disagreed with the spec.' }));
+    quizLogEl.append(item);
+  });
+}
+
 function renderDocumentsPane() {
   const onContextScreen = screens[currentScreen].type === 'context';
   const tabs = [
     ...(hasContext && !onContextScreen ? [{ id: 'context', title: 'Context' }] : []),
     ...session.documents.map((documentItem) => ({ id: documentItem.id, title: documentItem.title })),
   ];
-  if (tabs.length === 0) {
+  // The pane also needs to show when there are no real documents at all but
+  // the quiz log has at least one entry — see recordQuizAnswer above.
+  if (tabs.length === 0 && quizLogEntries.size === 0) {
     documentsPane.hidden = true;
     documentsToggle.hidden = true;
     return;
@@ -689,9 +759,14 @@ function renderDocumentsPane() {
   documentsToggle.hidden = false;
   documentsPane.hidden = false;
   applyDocPaneWidth();
-  if (!tabs.some((tab) => tab.id === activeDocTabId)) activeDocTabId = tabs[0].id;
+  renderQuizLog();
 
   documentsContainer.replaceChildren();
+  if (tabs.length === 0) {
+    selectDocument = () => {};
+    return;
+  }
+  if (!tabs.some((tab) => tab.id === activeDocTabId)) activeDocTabId = tabs[0].id;
   const navigation = create('nav', { className: 'document-list', ariaLabel: 'Documents' });
   const content = create('article', { id: 'document-content', className: 'document-content' });
   const buttons = new Map();
