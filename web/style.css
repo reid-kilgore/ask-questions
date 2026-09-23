@@ -100,9 +100,21 @@ button.primary { background: #276755; color: #fff; }
 .completion p:last-child { margin-bottom: 0; color: #3d6659; }
 
 /* --- Documents pane -------------------------------------------------------- */
-.documents-pane { position: relative; flex: 0 0 auto; height: 100%; background: #fff; border-left: 1px solid #dbe2df; overflow: hidden; }
+.documents-pane { position: relative; display: flex; flex-direction: column; flex: 0 0 auto; height: 100%; background: #fff; border-left: 1px solid #dbe2df; overflow: hidden; }
 .documents-pane-resizer { position: absolute; top: 0; left: -4px; width: 8px; height: 100%; cursor: col-resize; z-index: 5; }
-#documents { display: flex; flex-direction: column; height: 100%; min-height: 0; padding: clamp(18px, 3vw, 36px); }
+/* The quiz log (see renderQuizLog in app.js) is a standing section above the
+   tabbed documents, not a tab itself — it is a running transcript, not a
+   single document to switch away from. Capped at a fraction of the pane's
+   height with its own scroll, so a long run of quiz questions doesn't push
+   #documents (and any real supporting documents) out of view entirely. */
+.quiz-log { flex: 0 1 auto; max-height: 45%; overflow-y: auto; padding: clamp(14px, 2.4vw, 28px) clamp(18px, 3vw, 36px) 6px; border-bottom: 1px solid #dbe2df; }
+.quiz-log-title { margin: 0 0 10px; color: #53625d; font-size: .78rem; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; }
+.quiz-log-entry { margin: 0 0 12px; padding: 10px 12px; border-radius: 8px; background: #f6f8f7; }
+.quiz-log-entry:last-child { margin-bottom: 4px; }
+.quiz-log-heading { margin: 0 0 6px; font-weight: 650; color: #263630; }
+.quiz-log-answer { margin: 0 0 6px; color: #3a4844; }
+.quiz-log-disagree { margin: 6px 0 0; color: #9d6b1f; font-weight: 650; }
+#documents { display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; padding: clamp(18px, 3vw, 36px); }
 .document-list { display: grid; flex: 0 0 auto; grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); gap: 7px; margin: 0 0 16px; }
 .document-list button { background: #e8eeeb; color: #355147; font-size: .85rem; text-align: left; }
 .document-list button.active { background: #276755; color: #fff; }
