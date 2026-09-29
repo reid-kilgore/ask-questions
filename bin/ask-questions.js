@@ -1,9 +1,10 @@
 #!/usr/bin/env node
 import { createServer } from 'node:http';
 import { realpathSync } from 'node:fs';
-import { readFile } from 'node:fs/promises';
+import { mkdir, readdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { homedir } from 'node:os';
 import { randomBytes } from 'node:crypto';
 import { execFile, spawn } from 'node:child_process';
 import MarkdownIt from 'markdown-it';
@@ -39,9 +40,11 @@ markdown.renderer.rules.link_open = (tokens, index, options, environment, self) 
 export const HELP = `ask-questions — show a local blocking question form and return JSON
 
 Usage:
-  ask-questions --json '{"version":1,"questions":[...]}' [--no-open] [--ding|--no-ding]
-  ask-questions --file request.json [--no-open] [--ding|--no-ding]
-  printf '%s' '{"version":1,"questions":[...]}' | ask-questions [--no-open] [--ding|--no-ding]
+  ask-questions --json '{"version":1,"questions":[...]}' [--no-open] [--ding|--no-ding] [--tailnet]
+  ask-questions --file request.json [--no-open] [--ding|--no-ding] [--tailnet]
+  printf '%s' '{"version":1,"questions":[...]}' | ask-questions [--no-open] [--ding|--no-ding] [--tailnet]
+  ask-questions --recent [COUNT]
+  ask-questions --show ANSWERS_ID
 
 Local installation for this proof of concept:
   npm install
@@ -63,6 +66,17 @@ Options:
   --ding             Keep the ready sound enabled.
   --no-ding          Do not play the ready sound.
   The ready sound is enabled by default. When both sound options occur, the last option wins.
+  --tailnet          Bind the server to this machine's Tailscale IPv4 address (from
+                     tailscale ip -4) instead of 127.0.0.1, and print a URL that works
+                     from another device on the same tailnet. Falls back to 127.0.0.1 with
+                     a warning on stderr when tailscale ip -4 is unavailable or fails. The
+                     server never binds 0.0.0.0; without --tailnet it binds 127.0.0.1 as before.
+  --recent [COUNT]   Do not open a form. Print the COUNT most recent saved answer files
+                     (newest first) as a single JSON array to stdout, and exit 0. COUNT
+                     defaults to 10. Cannot be combined with --json, --file, or --show.
+  --show ANSWERS_ID  Do not open a form. Print the one saved answer file whose id or
+                     filename matches ANSWERS_ID to stdout, and exit 0 (or 1 if no saved
+                     answers match). Cannot be combined with --json, --file, or --recent.
 
 Question-writing guidance:
   Write questions in simple technical English. Include all relevant context in the question,
@@ -120,7 +134,7 @@ Lifecycle and output:
   Calling agents must disable their execution timeout or set it to several hours.
   Normal waiting is not a failure. After HTTP 200, the page shows a clear
   submitted or cancelled state and tries to close its tab. stdout contains exactly one JSON value:
-  submitted: {"version":1,"status":"submitted","askerPath":"/absolute/path","answers":{"question-id":{"value":"...","notes":"..."}},"annotations":{...},"submittedAt":"ISO-8601"}
+  submitted: {"version":1,"status":"submitted","askerPath":"/absolute/path","answers":{"question-id":{"value":"...","notes":"..."}},"annotations":{...},"submittedAt":"ISO-8601","answersId":"...","answersFile":"/absolute/path/to/saved/answers.json"}
   cancelled: {"version":1,"status":"cancelled","askerPath":"/absolute/path","answers":{},"annotations":{}}
   Multiple-choice values are arrays of strings. Single-choice and text values are normal
   values (a single optional choice can be null). Submitted answers are keyed by question id and
@@ -141,6 +155,19 @@ Lifecycle and output:
   The page shows it as Asked from. When the command starts in tmux, it also
   makes a best-effort, short lookup of the current tmux window name. If found, askerTmuxWindow is
   shown near Asked from and included as an optional top-level result field.
+
+Durable answers:
+  On submit, before printing the result to stdout, the command itself writes the full submitted
+  result to its own file under ~/.ask-questions/answers/, named
+  <submittedAt-with-colons-and-dots-replaced-by-dashes>-<answersId>.json, where answersId is a
+  short random hex id generated for that submission. The write is atomic: the file is written to a
+  temporary name in the same directory first, then renamed into place, so a reader never observes a
+  partially written file. The submitted result's top-level answersId and answersFile (the file's
+  absolute path) fields are both in the file and in the stdout JSON, and the path is also printed as
+  a line on stderr. No caller redirect is required to keep the answers: even if a caller's own
+  stdout capture fails, the file on disk still has them. Cancelled sessions are not saved -- only a
+  submitted result is written. Use --recent or --show (above) to read saved answers back later, from
+  any working directory or any caller.
 
 Annotations:
   The person answering can comment directly on the text they are reading -- not only answer the
@@ -224,6 +251,15 @@ Examples:
   # Capture only the submitted JSON. The session URL remains on stderr.
   result="$(ask-questions --file examples/request.json --no-open)"
   printf '%s\\n' "$result"
+
+  # Serve on this machine's Tailscale address so a session on the other laptop can open it.
+  ask-questions --file examples/request.json --tailnet --no-open
+
+  # Read back the 5 most recently saved answer files.
+  ask-questions --recent 5
+
+  # Read back one saved answer file by its answersId.
+  ask-questions --show 3f9a0c1b2d4e
 `;
 
 function reportError(error) {
@@ -356,7 +392,76 @@ function askerMetadata(askerPath, askerTmuxWindow) {
   return { askerPath, ...(askerTmuxWindow ? { askerTmuxWindow } : {}) };
 }
 
-async function serve(payload, documents, messageHtml, messageBlockText, anchors, { noOpen, ding, askerPath, askerTmuxWindow }) {
+// Durable answers live under ~/.ask-questions/answers/, one file per submitted result, so a
+// caller's own stdout redirect is never the only copy. os.homedir() honors $HOME, which lets
+// tests point this at a throwaway directory instead of the real one.
+export function answersDirectory() {
+  return resolve(homedir(), '.ask-questions', 'answers');
+}
+
+function answerIdFromFilename(filename) {
+  const stem = filename.slice(0, -'.json'.length);
+  return stem.slice(stem.lastIndexOf('-') + 1);
+}
+
+// Atomic: write to a temp name in the same directory, then rename into place, so a concurrent
+// reader (--recent, --show, or a person poking around) never sees a partially written file.
+export async function saveAnswers(result) {
+  const directory = answersDirectory();
+  await mkdir(directory, { recursive: true });
+  const id = randomBytes(6).toString('hex');
+  const stamp = result.submittedAt.replace(/[:.]/g, '-');
+  const filePath = resolve(directory, `${stamp}-${id}.json`);
+  const tempPath = `${filePath}.tmp-${process.pid}`;
+  const record = { ...result, answersId: id, answersFile: filePath };
+  await writeFile(tempPath, `${JSON.stringify(record, null, 2)}\n`, 'utf8');
+  await rename(tempPath, filePath);
+  return record;
+}
+
+async function listAnswerFilenames() {
+  let entries;
+  try {
+    entries = await readdir(answersDirectory());
+  } catch (error) {
+    if (error.code === 'ENOENT') return [];
+    throw error;
+  }
+  // Filenames sort lexically in submission order because the timestamp prefix is ISO-8601-like.
+  return entries.filter((name) => name.endsWith('.json')).sort();
+}
+
+export async function readRecentAnswers(count) {
+  const filenames = await listAnswerFilenames();
+  const chosen = filenames.slice(-count).reverse();
+  return Promise.all(chosen.map(async (name) => JSON.parse(await readFile(resolve(answersDirectory(), name), 'utf8'))));
+}
+
+export async function readAnswerById(idOrFilename) {
+  const filenames = await listAnswerFilenames();
+  const match = filenames.find((name) => name === idOrFilename || name === `${idOrFilename}.json` || answerIdFromFilename(name) === idOrFilename);
+  if (!match) return undefined;
+  return JSON.parse(await readFile(resolve(answersDirectory(), match), 'utf8'));
+}
+
+// `tailscale ip -4` is the one lookup: it needs neither a login check nor a daemon socket path,
+// and it fails fast (ENOENT or a non-zero exit) when Tailscale is not installed or not up.
+export function resolveBindAddress(useTailnet, { execFileFn = execFile, write = (text) => process.stderr.write(text) } = {}) {
+  if (!useTailnet) return Promise.resolve({ address: '127.0.0.1', onTailnet: false });
+  return new Promise((resolveAddress) => {
+    execFileFn('tailscale', ['ip', '-4'], { timeout: 2_000 }, (error, stdout) => {
+      const address = error ? '' : String(stdout).trim();
+      if (!address) {
+        write(`ask-questions: Could not determine a Tailscale address (${error ? error.message : 'empty output'}). Falling back to 127.0.0.1.\n`);
+        resolveAddress({ address: '127.0.0.1', onTailnet: false });
+        return;
+      }
+      resolveAddress({ address, onTailnet: true });
+    });
+  });
+}
+
+async function serve(payload, documents, messageHtml, messageBlockText, anchors, { noOpen, ding, askerPath, askerTmuxWindow, tailnet }) {
   const metadata = askerMetadata(askerPath, askerTmuxWindow);
   const token = randomBytes(24).toString('hex');
   const index = await staticFile('index.html');
@@ -416,8 +521,11 @@ async function serve(payload, documents, messageHtml, messageBlockText, anchors,
             total: quizAnswers.length,
           }
           : undefined;
+        const submitted = { version: 1, status: 'submitted', ...metadata, answers, annotations, ...(score ? { score } : {}), submittedAt: new Date().toISOString() };
+        const saved = await saveAnswers(submitted);
+        process.stderr.write(`ask-questions: saved answers to ${saved.answersFile}\n`);
         send(response, 200, 'application/json; charset=utf-8', JSON.stringify({ ok: true }));
-        completeOnce({ version: 1, status: 'submitted', ...metadata, answers, annotations, ...(score ? { score } : {}), submittedAt: new Date().toISOString() });
+        completeOnce(saved);
         return;
       }
       if (request.method === 'POST' && suffix === '/api/cancel') {
@@ -431,10 +539,12 @@ async function serve(payload, documents, messageHtml, messageBlockText, anchors,
       send(response, status, 'application/json; charset=utf-8', JSON.stringify({ error: error.message, issues: error.issues ?? [] }));
     }
   });
-  await new Promise((resolveListen, rejectListen) => { server.once('error', rejectListen); server.listen(0, '127.0.0.1', resolveListen); });
-  const address = server.address();
-  const url = `http://127.0.0.1:${address.port}/${token}/`;
+  const { address: bindAddress, onTailnet } = await resolveBindAddress(tailnet);
+  await new Promise((resolveListen, rejectListen) => { server.once('error', rejectListen); server.listen(0, bindAddress, resolveListen); });
+  const boundAddress = server.address();
+  const url = `http://${bindAddress}:${boundAddress.port}/${token}/`;
   process.stderr.write(sessionUrlMessage(url));
+  if (onTailnet) process.stderr.write(`ask-questions: bound to the Tailscale address ${bindAddress} -- open this URL from any other device on your tailnet.\n`);
   if (ding) playReadySound();
   if (!noOpen) openBrowser(url);
   const interrupt = () => completeOnce({ version: 1, status: 'cancelled', ...metadata, answers: {}, annotations: {} });
@@ -449,6 +559,20 @@ export async function main(argv = process.argv.slice(2)) {
   try {
     const args = parseArguments(argv);
     if (args.help) { process.stdout.write(HELP); return 0; }
+    if (args.recent) {
+      const records = await readRecentAnswers(args.recentCount);
+      process.stdout.write(`${JSON.stringify(records)}\n`);
+      return 0;
+    }
+    if (args.show !== undefined) {
+      const record = await readAnswerById(args.show);
+      if (!record) {
+        process.stderr.write(`ask-questions: no saved answers match ${args.show}\n`);
+        return 1;
+      }
+      process.stdout.write(`${JSON.stringify(record)}\n`);
+      return 0;
+    }
     const askerPath = process.cwd();
     const askerTmuxWindow = await lookupTmuxWindow();
     const { payload, documents, messageHtml, messageBlockText, anchors } = await readPayload(args);

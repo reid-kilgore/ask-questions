@@ -100,6 +100,27 @@ There is no built-in answer timeout — a human can take hours. The command just
 
 The ready sound plays once the page is ready and is on by default; use `--no-ding` to turn it off. `--no-open` skips launching a browser automatically — useful for automation — the session URL is always printed to standard error regardless, as a plain line or (when standard error is a terminal) also as a clickable OSC 8 hyperlink.
 
+## Durable answers
+
+Every submitted result is also written to its own file, so a caller's own stdout redirect is never the only copy of an answer. On submit, before printing to stdout, the command writes the full result to `~/.ask-questions/answers/<timestamp>-<answersId>.json`, atomically (a temp file written first, then renamed into place). The result's `answersId` and `answersFile` fields, and a matching line on stderr, all point at the same file. Cancelled sessions are not saved.
+
+Read saved answers back later, from any directory, with either flag on their own (they don't open a form):
+
+```sh
+ask-questions --recent 5        # the 5 most recently saved answer files, newest first, as a JSON array
+ask-questions --show <answersId> # the one saved file whose id or filename matches
+```
+
+## Serving across two machines on the same tailnet
+
+By default the server binds to `127.0.0.1` — reachable only from the machine running it. Add `--tailnet` to bind instead to this machine's Tailscale IPv4 address (from `tailscale ip -4`) and print a URL that works from any other device on the same tailnet:
+
+```sh
+ask-questions --file examples/request.json --tailnet --no-open
+```
+
+This is how a form started by an agent on one laptop can be answered from a browser on the other. It never binds `0.0.0.0`; when `tailscale ip -4` is unavailable or fails, it falls back to `127.0.0.1` and prints a warning to stderr rather than failing outright. The random per-session URL token is the only access control either way — treat the printed URL as a bearer credential for that one session.
+
 ## What this is, and isn't
 
-The browser interface is a proof of concept: it starts in Focus mode with an All-questions view alongside it, has no authentication beyond binding to `127.0.0.1` and using a random per-session URL token, and has no persistence or session recovery. On the final review screen, **Copy as JSON** copies the exact result JSON (including any annotations) to the clipboard without submitting, which is the one recovery option if a calling agent has already timed out while the page is still open — it can't restart a stopped command or restore a closed tab.
+The browser interface is a proof of concept: it starts in Focus mode with an All-questions view alongside it, and has no authentication beyond binding to a single local or tailnet address and using a random per-session URL token. It has no in-page session recovery — a closed tab or a lost connection can't be resumed — but submitted answers do persist to disk (see Durable answers, above). On the final review screen, **Copy as JSON** copies the exact result JSON (including any annotations) to the clipboard without submitting, which is the one recovery option if a calling agent has already timed out while the page is still open — it can't restart a stopped command or restore a closed tab.
