@@ -1,11 +1,11 @@
 import assert from 'node:assert/strict';
-import { spawn } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
 import { chmod, mkdtemp, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import test from 'node:test';
 import { tmpdir } from 'node:os';
 import { EventEmitter } from 'node:events';
-import { lookupTmuxWindow, openBrowser, sessionUrlMessage } from '../bin/ask-questions.js';
+import { lookupTmuxWindow, openBrowser, resolveBindAddress, sessionUrlMessage } from '../bin/ask-questions.js';
 import { validatePayload } from '../lib/contract.js';
 
 const command = ['node', resolve('bin/ask-questions.js')];
@@ -627,4 +627,173 @@ test('interface source keeps rail navigation, safe review rendering, and Other i
   assert.match(app, /askerPath/);
   assert.match(app, /textContent = session\.askerPath/);
   assert.match(app, /attachMessage\(contextMessage, session\.messageHtml, session\.messageBlockText\)/);
+});
+
+test('durable answers: submit writes an atomic file under HOME/.ask-questions/answers, prints its path, and --recent/--show read it back', async () => {
+  const fakeHome = await mkdtemp(join(tmpdir(), 'ask-questions-home-'));
+  const env = { ...withoutTmux(), HOME: fakeHome };
+  const input = JSON.stringify({ version: 1, questions: [{ id: 'go', prompt: 'Continue?', type: 'single', required: true, options: [{ value: 'yes', label: 'Yes' }] }] });
+  const session = startCli(['--no-open', '--no-ding'], input, process.cwd(), env);
+  try {
+    const url = await waitForUrl(session);
+    await fetch(`${url}api/submit`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ answers: [{ questionId: 'go', value: 'yes', notes: 'ok' }] }),
+    });
+    await session.closed;
+    const { stdout, stderr } = session.output();
+    const result = JSON.parse(stdout);
+    assert.equal(typeof result.answersId, 'string');
+    assert.ok(result.answersId.length > 0);
+    assert.equal(result.answersFile, join(fakeHome, '.ask-questions', 'answers', `${result.submittedAt.replace(/[:.]/g, '-')}-${result.answersId}.json`));
+    assert.match(stderr, /saved answers to /);
+    assert.ok(stderr.includes(result.answersFile));
+
+    const saved = JSON.parse(await readFile(result.answersFile, 'utf8'));
+    assert.deepEqual(saved.answers, result.answers);
+    assert.equal(saved.answersId, result.answersId);
+
+    // No leftover temp file from the atomic write.
+    const { readdir } = await import('node:fs/promises');
+    const filenames = await readdir(join(fakeHome, '.ask-questions', 'answers'));
+    assert.deepEqual(filenames, [`${result.submittedAt.replace(/[:.]/g, '-')}-${result.answersId}.json`]);
+
+    const recentSession = startCli(['--recent', '1'], '', process.cwd(), env);
+    const recentClose = await recentSession.closed;
+    assert.equal(recentClose.code, 0);
+    const recent = JSON.parse(recentSession.output().stdout);
+    assert.equal(recent.length, 1);
+    assert.equal(recent[0].answersId, result.answersId);
+
+    const showSession = startCli(['--show', result.answersId], '', process.cwd(), env);
+    const showClose = await showSession.closed;
+    assert.equal(showClose.code, 0);
+    const shown = JSON.parse(showSession.output().stdout);
+    assert.equal(shown.answersId, result.answersId);
+    assert.deepEqual(shown.answers, result.answers);
+  } finally {
+    await stopChild(session);
+    await rm(fakeHome, { recursive: true, force: true });
+  }
+});
+
+test('a cancelled session is not saved to durable answers', async () => {
+  const fakeHome = await mkdtemp(join(tmpdir(), 'ask-questions-home-'));
+  const env = { ...withoutTmux(), HOME: fakeHome };
+  const input = JSON.stringify({ version: 1, questions: [{ id: 'stop', prompt: 'Continue?', type: 'text' }] });
+  const session = startCli(['--no-open', '--no-ding'], input, process.cwd(), env);
+  try {
+    const url = await waitForUrl(session);
+    await fetch(`${url}api/cancel`, { method: 'POST' });
+    await session.closed;
+    const recentSession = startCli(['--recent'], '', process.cwd(), env);
+    const recentClose = await recentSession.closed;
+    assert.equal(recentClose.code, 0);
+    assert.deepEqual(JSON.parse(recentSession.output().stdout), []);
+  } finally {
+    await stopChild(session);
+    await rm(fakeHome, { recursive: true, force: true });
+  }
+});
+
+test('--recent with no saved answers directory returns an empty array, and --show with no match exits 1', async () => {
+  const fakeHome = await mkdtemp(join(tmpdir(), 'ask-questions-home-'));
+  const env = { ...withoutTmux(), HOME: fakeHome };
+  try {
+    const recentSession = startCli(['--recent'], '', process.cwd(), env);
+    const recentClose = await recentSession.closed;
+    assert.equal(recentClose.code, 0);
+    assert.deepEqual(JSON.parse(recentSession.output().stdout), []);
+
+    const showSession = startCli(['--show', 'nonexistent'], '', process.cwd(), env);
+    const showClose = await showSession.closed;
+    assert.equal(showClose.code, 1);
+    assert.match(showSession.output().stderr, /no saved answers match nonexistent/);
+  } finally {
+    await rm(fakeHome, { recursive: true, force: true });
+  }
+});
+
+test('resolveBindAddress asks `tailscale ip -4` and uses its answer', async () => {
+  let call;
+  const { address, onTailnet } = await resolveBindAddress(true, {
+    execFileFn: (file, args, options, callback) => { call = { file, args, options }; callback(null, '100.72.212.44\n', ''); },
+  });
+  assert.equal(address, '100.72.212.44');
+  assert.equal(onTailnet, true);
+  assert.deepEqual(call.args, ['ip', '-4']);
+  assert.equal(call.file, 'tailscale');
+});
+
+test('resolveBindAddress falls back to 127.0.0.1 and warns when tailscale fails or is missing', async () => {
+  const messages = [];
+  const { address, onTailnet } = await resolveBindAddress(true, {
+    execFileFn: (_file, _args, _options, callback) => callback(new Error('spawn tailscale ENOENT'), '', ''),
+    write: (text) => messages.push(text),
+  });
+  assert.equal(address, '127.0.0.1');
+  assert.equal(onTailnet, false);
+  assert.equal(messages.length, 1);
+  assert.match(messages[0], /Could not determine a Tailscale address \(spawn tailscale ENOENT\)/);
+  assert.match(messages[0], /Falling back to 127\.0\.0\.1/);
+});
+
+test('resolveBindAddress without --tailnet never calls out and stays on 127.0.0.1', async () => {
+  let called = false;
+  const { address, onTailnet } = await resolveBindAddress(false, { execFileFn: () => { called = true; } });
+  assert.equal(address, '127.0.0.1');
+  assert.equal(onTailnet, false);
+  assert.equal(called, false);
+});
+
+test('--tailnet binds to this machine\'s real Tailscale address and prints a matching URL, when Tailscale is installed here', async (t) => {
+  const realAddress = await new Promise((resolveAddress) => {
+    execFile('tailscale', ['ip', '-4'], { timeout: 2_000 }, (error, stdout) => resolveAddress(error ? null : String(stdout).trim()));
+  });
+  if (!realAddress) { t.skip('tailscale is not available on this machine'); return; }
+  const fakeHome = await mkdtemp(join(tmpdir(), 'ask-questions-home-'));
+  const env = { ...withoutTmux(), HOME: fakeHome };
+  const input = JSON.stringify({ version: 1, questions: [{ id: 'stop', prompt: 'Continue?', type: 'text' }] });
+  const session = startCli(['--no-open', '--no-ding', '--tailnet'], input, process.cwd(), env);
+  try {
+    const deadline = Date.now() + 5_000;
+    const escaped = realAddress.replace(/\./g, '\\.');
+    let match;
+    while (Date.now() < deadline && !match) {
+      match = session.output().stderr.match(new RegExp(`http://${escaped}:\\d+/[a-f0-9]+/`));
+      if (!match) await new Promise((r) => setTimeout(r, 20));
+    }
+    assert.ok(match, `Expected a ${realAddress} URL, got: ${session.output().stderr}`);
+    assert.match(session.output().stderr, new RegExp(`bound to the Tailscale address ${escaped}`));
+    await fetch(`${match[0]}api/cancel`, { method: 'POST' });
+    await session.closed;
+  } finally {
+    await stopChild(session);
+    await rm(fakeHome, { recursive: true, force: true });
+  }
+});
+
+test('--tailnet falls back to 127.0.0.1 with a warning when tailscale is unavailable', async () => {
+  const binDirectory = await mkdtemp(join(tmpdir(), 'ask-questions-no-tailscale-'));
+  const fakeHome = await mkdtemp(join(tmpdir(), 'ask-questions-home-'));
+  // Shadow any real tailscale on PATH with one that always fails, so the lookup fails
+  // deterministically without also hiding `node` itself from PATH resolution.
+  const fakeTailscale = join(binDirectory, 'tailscale');
+  await writeFile(fakeTailscale, '#!/bin/sh\nexit 1\n');
+  await chmod(fakeTailscale, 0o755);
+  const env = { ...withoutTmux(), HOME: fakeHome, PATH: `${binDirectory}:${process.env.PATH}` };
+  const input = JSON.stringify({ version: 1, questions: [{ id: 'stop', prompt: 'Continue?', type: 'text' }] });
+  const session = startCli(['--no-open', '--no-ding', '--tailnet'], input, process.cwd(), env);
+  try {
+    const url = await waitForUrl(session);
+    assert.match(url, /^http:\/\/127\.0\.0\.1:/);
+    assert.match(session.output().stderr, /Could not determine a Tailscale address/);
+    await fetch(`${url}api/cancel`, { method: 'POST' });
+    await session.closed;
+  } finally {
+    await stopChild(session);
+    await rm(binDirectory, { recursive: true, force: true });
+    await rm(fakeHome, { recursive: true, force: true });
+  }
 });

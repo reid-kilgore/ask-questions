@@ -79,16 +79,30 @@ test('rejects a document symlink that points outside the input directory', async
   }
 });
 
+const defaultParsedArguments = { help: false, json: undefined, file: undefined, noOpen: false, ding: true, tailnet: false, recent: false, recentCount: 10, show: undefined };
+
 test('parses ding as enabled by default and lets the last ding flag win', () => {
-  assert.deepEqual(parseArguments(['--json', '{}']), { help: false, json: '{}', file: undefined, noOpen: false, ding: true });
-  assert.deepEqual(parseArguments(['--json', '{}', '--no-ding']), { help: false, json: '{}', file: undefined, noOpen: false, ding: false });
-  assert.deepEqual(parseArguments(['--json', '{}', '--no-ding', '--ding']), { help: false, json: '{}', file: undefined, noOpen: false, ding: true });
-  assert.deepEqual(parseArguments(['--json', '{}', '--ding', '--no-ding']), { help: false, json: '{}', file: undefined, noOpen: false, ding: false });
+  assert.deepEqual(parseArguments(['--json', '{}']), { ...defaultParsedArguments, json: '{}' });
+  assert.deepEqual(parseArguments(['--json', '{}', '--no-ding']), { ...defaultParsedArguments, json: '{}', ding: false });
+  assert.deepEqual(parseArguments(['--json', '{}', '--no-ding', '--ding']), { ...defaultParsedArguments, json: '{}', ding: true });
+  assert.deepEqual(parseArguments(['--json', '{}', '--ding', '--no-ding']), { ...defaultParsedArguments, json: '{}', ding: false });
 });
 
 test('parses input mode arguments and rejects mixed modes', () => {
-  assert.deepEqual(parseArguments(['--json', '{}', '--no-open', '--ding']), { help: false, json: '{}', file: undefined, noOpen: true, ding: true });
+  assert.deepEqual(parseArguments(['--json', '{}', '--no-open', '--ding']), { ...defaultParsedArguments, json: '{}', noOpen: true, ding: true });
   assert.throws(() => parseArguments(['--json', '{}', '--file', 'request.json']), ContractError);
+});
+
+test('parses --tailnet, --recent (with and without a count), and --show', () => {
+  assert.deepEqual(parseArguments(['--json', '{}', '--tailnet']), { ...defaultParsedArguments, json: '{}', tailnet: true });
+  assert.deepEqual(parseArguments(['--recent']), { ...defaultParsedArguments, recent: true, recentCount: 10 });
+  assert.deepEqual(parseArguments(['--recent', '5']), { ...defaultParsedArguments, recent: true, recentCount: 5 });
+  assert.deepEqual(parseArguments(['--show', 'abc123']), { ...defaultParsedArguments, show: 'abc123' });
+  assert.throws(() => parseArguments(['--recent', '--json', '{}']), ContractError);
+  assert.throws(() => parseArguments(['--show', 'abc123', '--file', 'request.json']), ContractError);
+  assert.throws(() => parseArguments(['--recent', '--show', 'abc123']), ContractError);
+  assert.throws(() => parseArguments(['--recent', '--recent']), ContractError);
+  assert.throws(() => parseArguments(['--show']), ContractError);
 });
 
 const annotationPayload = {
