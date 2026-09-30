@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { createServer } from 'node:http';
 import { realpathSync } from 'node:fs';
-import { mkdir, readdir, readFile, rename, writeFile } from 'node:fs/promises';
+import { mkdir, readdir, readFile, rename, unlink, writeFile } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { homedir } from 'node:os';
@@ -44,6 +44,7 @@ Usage:
   ask-questions --file request.json [--no-open] [--ding|--no-ding] [--tailnet]
   printf '%s' '{"version":1,"questions":[...]}' | ask-questions [--no-open] [--ding|--no-ding] [--tailnet]
   ask-questions --recent [COUNT]
+  ask-questions --open
   ask-questions --show ANSWERS_ID
 
 Local installation for this proof of concept:
@@ -71,6 +72,12 @@ Options:
                      from another device on the same tailnet. Falls back to 127.0.0.1 with
                      a warning on stderr when tailscale ip -4 is unavailable or fails. The
                      server never binds 0.0.0.0; without --tailnet it binds 127.0.0.1 as before.
+  --open             Do not open a form. Print, as a JSON array, every form that is still waiting
+                     for an answer: {id,title,url,startedAt,pid,askerPath,state}. A form writes
+                     ~/.ask-questions/pending/<id>.json when its URL is ready and removes it on
+                     submit or cancel. An entry whose process has died is listed once with
+                     state "abandoned" and its file is deleted. Cannot be combined with
+                     --json, --file, --recent or --show.
   --recent [COUNT]   Do not open a form. Print the COUNT most recent saved answer files
                      (newest first) as a single JSON array to stdout, and exit 0. COUNT
                      defaults to 10. Cannot be combined with --json, --file, or --show.
@@ -444,6 +451,54 @@ export async function readAnswerById(idOrFilename) {
   return JSON.parse(await readFile(resolve(answersDirectory(), match), 'utf8'));
 }
 
+// A form that is still open leaves a pending file under ~/.ask-questions/pending/, written when
+// the session URL is ready and removed on submit, cancel or Ctrl-C. A process killed without a
+// chance to clean up leaves its file behind; --open notices the dead pid and prunes it.
+export function pendingDirectory() {
+  return resolve(homedir(), '.ask-questions', 'pending');
+}
+
+export async function writePending(record) {
+  const directory = pendingDirectory();
+  await mkdir(directory, { recursive: true });
+  const filePath = resolve(directory, `${record.id}.json`);
+  const tempPath = `${filePath}.tmp-${process.pid}`;
+  // The URL carries the session token, so keep the file private to this user.
+  await writeFile(tempPath, `${JSON.stringify(record, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 });
+  await rename(tempPath, filePath);
+  return filePath;
+}
+
+export async function removePending(id) {
+  try { await unlink(resolve(pendingDirectory(), `${id}.json`)); } catch (error) { if (error.code !== 'ENOENT') throw error; }
+}
+
+export function pidAlive(pid, killFn = process.kill) {
+  if (!Number.isInteger(pid) || pid <= 0) return false;
+  try { killFn(pid, 0); return true; } catch (error) { return error.code === 'EPERM'; }
+}
+
+// Lists the forms still waiting. Entries whose process has died are reported once as
+// "abandoned" and their files are deleted; unreadable files are skipped, never guessed at.
+export async function listOpenForms({ isAlive = pidAlive } = {}) {
+  let entries;
+  try { entries = await readdir(pendingDirectory()); } catch (error) {
+    if (error.code === 'ENOENT') return [];
+    throw error;
+  }
+  const records = [];
+  for (const name of entries.filter((entry) => entry.endsWith('.json')).sort()) {
+    let record;
+    try { record = JSON.parse(await readFile(resolve(pendingDirectory(), name), 'utf8')); } catch { continue; }
+    if (isAlive(record.pid)) records.push({ ...record, state: 'pending' });
+    else {
+      await removePending(record.id ?? name.slice(0, -'.json'.length));
+      records.push({ ...record, state: 'abandoned' });
+    }
+  }
+  return records.sort((a, b) => String(a.startedAt).localeCompare(String(b.startedAt)));
+}
+
 // `tailscale ip -4` is the one lookup: it needs neither a login check nor a daemon socket path,
 // and it fails fast (ENOENT or a non-zero exit) when Tailscale is not installed or not up.
 export function resolveBindAddress(useTailnet, { execFileFn = execFile, write = (text) => process.stderr.write(text) } = {}) {
@@ -545,12 +600,26 @@ async function serve(payload, documents, messageHtml, messageBlockText, anchors,
   const url = `http://${bindAddress}:${boundAddress.port}/${token}/`;
   process.stderr.write(sessionUrlMessage(url));
   if (onTailnet) process.stderr.write(`ask-questions: bound to the Tailscale address ${bindAddress} -- open this URL from any other device on your tailnet.\n`);
+  const pendingId = randomBytes(6).toString('hex');
+  try {
+    await writePending({
+      id: pendingId,
+      title: payload.title ?? payload.questions[0]?.prompt ?? payload.questions[0]?.id ?? '(untitled)',
+      url,
+      startedAt: new Date().toISOString(),
+      pid: process.pid,
+      askerPath,
+    });
+  } catch (error) {
+    process.stderr.write(`ask-questions: could not record the pending form: ${error.message}\n`);
+  }
   if (ding) playReadySound();
   if (!noOpen) openBrowser(url);
   const interrupt = () => completeOnce({ version: 1, status: 'cancelled', ...metadata, answers: {}, annotations: {} });
   process.once('SIGINT', interrupt);
   const result = await finished;
   process.removeListener('SIGINT', interrupt);
+  await removePending(pendingId).catch(() => {});
   await new Promise((resolveClose) => server.close(resolveClose));
   return result;
 }
@@ -562,6 +631,10 @@ export async function main(argv = process.argv.slice(2)) {
     if (args.recent) {
       const records = await readRecentAnswers(args.recentCount);
       process.stdout.write(`${JSON.stringify(records)}\n`);
+      return 0;
+    }
+    if (args.open) {
+      process.stdout.write(`${JSON.stringify(await listOpenForms())}\n`);
       return 0;
     }
     if (args.show !== undefined) {

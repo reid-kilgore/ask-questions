@@ -79,7 +79,7 @@ test('rejects a document symlink that points outside the input directory', async
   }
 });
 
-const defaultParsedArguments = { help: false, json: undefined, file: undefined, noOpen: false, ding: true, tailnet: false, recent: false, recentCount: 10, show: undefined };
+const defaultParsedArguments = { help: false, json: undefined, file: undefined, noOpen: false, ding: true, tailnet: false, recent: false, recentCount: 10, show: undefined, open: false };
 
 test('parses ding as enabled by default and lets the last ding flag win', () => {
   assert.deepEqual(parseArguments(['--json', '{}']), { ...defaultParsedArguments, json: '{}' });

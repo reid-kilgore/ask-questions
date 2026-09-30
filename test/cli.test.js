@@ -760,9 +760,11 @@ test('--tailnet binds to this machine\'s real Tailscale address and prints a mat
     const deadline = Date.now() + 5_000;
     const escaped = realAddress.replace(/\./g, '\\.');
     let match;
-    while (Date.now() < deadline && !match) {
+    // The URL line and the "bound to" line are separate writes that can arrive in separate
+    // chunks, so wait for both rather than asserting after the first.
+    while (Date.now() < deadline && !(match && /bound to the Tailscale address/.test(session.output().stderr))) {
       match = session.output().stderr.match(new RegExp(`http://${escaped}:\\d+/[a-f0-9]+/`));
-      if (!match) await new Promise((r) => setTimeout(r, 20));
+      if (!match || !/bound to the Tailscale address/.test(session.output().stderr)) await new Promise((r) => setTimeout(r, 20));
     }
     assert.ok(match, `Expected a ${realAddress} URL, got: ${session.output().stderr}`);
     assert.match(session.output().stderr, new RegExp(`bound to the Tailscale address ${escaped}`));
@@ -794,6 +796,73 @@ test('--tailnet falls back to 127.0.0.1 with a warning when tailscale is unavail
   } finally {
     await stopChild(session);
     await rm(binDirectory, { recursive: true, force: true });
+    await rm(fakeHome, { recursive: true, force: true });
+  }
+});
+
+test('--open lists a waiting form, drops it on submit, and marks a dead-process entry abandoned', async () => {
+  const fakeHome = await mkdtemp(join(tmpdir(), 'ask-questions-home-'));
+  const env = { ...withoutTmux(), HOME: fakeHome };
+  const input = JSON.stringify({ version: 1, title: 'Pick one', questions: [{ id: 'go', prompt: 'Continue?', type: 'single', required: true, options: [{ value: 'yes', label: 'Yes' }] }] });
+  const session = startCli(['--no-open', '--no-ding'], input, process.cwd(), env);
+  try {
+    const url = await waitForUrl(session);
+    const waiting = startCli(['--open'], '', process.cwd(), env);
+    assert.equal((await waiting.closed).code, 0);
+    const listed = JSON.parse(waiting.output().stdout);
+    assert.equal(listed.length, 1);
+    assert.equal(listed[0].state, 'pending');
+    assert.equal(listed[0].title, 'Pick one');
+    assert.equal(listed[0].url, url);
+    assert.equal(listed[0].pid, session.child.pid);
+
+    await fetch(`${url}api/submit`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ answers: [{ questionId: 'go', value: 'yes', notes: 'ok' }] }),
+    });
+    await session.closed;
+    const after = startCli(['--open'], '', process.cwd(), env);
+    await after.closed;
+    assert.deepEqual(JSON.parse(after.output().stdout), []);
+
+    // A file left by a process that died is reported once as abandoned, then pruned.
+    const { mkdir } = await import('node:fs/promises');
+    await mkdir(join(fakeHome, '.ask-questions', 'pending'), { recursive: true });
+    await writeFile(join(fakeHome, '.ask-questions', 'pending', 'dead1.json'), JSON.stringify({ id: 'dead1', title: 'Old', url: 'http://127.0.0.1:1/x/', startedAt: '2026-01-01T00:00:00.000Z', pid: 2 ** 22 + 12345, askerPath: '/x' }));
+    const dead = startCli(['--open'], '', process.cwd(), env);
+    await dead.closed;
+    const deadList = JSON.parse(dead.output().stdout);
+    assert.equal(deadList.length, 1);
+    assert.equal(deadList[0].state, 'abandoned');
+    const again = startCli(['--open'], '', process.cwd(), env);
+    await again.closed;
+    assert.deepEqual(JSON.parse(again.output().stdout), []);
+  } finally {
+    await stopChild(session);
+    await rm(fakeHome, { recursive: true, force: true });
+  }
+});
+
+test('--open is refused together with --recent', async () => {
+  const session = startCli(['--open', '--recent']);
+  assert.equal((await session.closed).code, 1);
+  assert.match(session.output().stderr, /--open cannot be combined/);
+});
+
+test('a cancelled form removes its pending file', async () => {
+  const fakeHome = await mkdtemp(join(tmpdir(), 'ask-questions-home-'));
+  const env = { ...withoutTmux(), HOME: fakeHome };
+  const input = JSON.stringify({ version: 1, questions: [{ id: 'go', prompt: 'Continue?', type: 'text', required: false }] });
+  const session = startCli(['--no-open', '--no-ding'], input, process.cwd(), env);
+  try {
+    const url = await waitForUrl(session);
+    await fetch(`${url}api/cancel`, { method: 'POST' });
+    await session.closed;
+    const { readdir } = await import('node:fs/promises');
+    assert.deepEqual(await readdir(join(fakeHome, '.ask-questions', 'pending')), []);
+  } finally {
+    await stopChild(session);
     await rm(fakeHome, { recursive: true, force: true });
   }
 });
