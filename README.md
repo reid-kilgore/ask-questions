@@ -111,6 +111,14 @@ ask-questions --recent 5        # the 5 most recently saved answer files, newest
 ask-questions --show <answersId> # the one saved file whose id or filename matches
 ```
 
+## Open forms
+
+While a form is waiting, the command keeps `~/.ask-questions/pending/<id>.json` (id, title, URL, start time, pid, caller directory, file mode 0600). The file is removed on submit, cancel or Ctrl-C. List what is still waiting, without opening a form:
+
+```sh
+ask-questions --open   # JSON array; state is "pending", or "abandoned" once for an entry whose process died (its file is then deleted)
+```
+
 ## Serving across two machines on the same tailnet
 
 By default the server binds to `127.0.0.1` — reachable only from the machine running it. Add `--tailnet` to bind instead to this machine's Tailscale IPv4 address (from `tailscale ip -4`) and print a URL that works from any other device on the same tailnet:
