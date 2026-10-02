@@ -122,6 +122,18 @@ button.primary { background: #276755; color: #fff; }
 .document-content h1, .document-content h2, .document-content h3 { margin-top: 1.3em; font-size: 1.25rem; letter-spacing: -.02em; }
 .document-content pre { overflow-x: auto; padding: 12px; border-radius: 6px; background: #f0f3f1; }
 .document-content a { color: #1e6652; }
+/* Tables scroll sideways instead of squeezing: the container's overflow-wrap: anywhere would otherwise
+   shrink every cell's minimum width to one character and split words mid-letter. */
+.document-content table { display: block; max-width: 100%; overflow-x: auto; border-collapse: collapse; margin: 1em 0; font-size: .92rem; line-height: 1.45; overflow-wrap: normal;
+  /* Scroll cue: the white covers travel with the content (local) and hide the fixed edge shadows (scroll) until more content lies off-screen. */
+  background: linear-gradient(to right, #fff 30%, rgb(255 255 255 / 0)) left center / 40px 100% no-repeat local,
+    linear-gradient(to left, #fff 30%, rgb(255 255 255 / 0)) right center / 40px 100% no-repeat local,
+    radial-gradient(farthest-side at 0 50%, rgb(0 0 0 / 22%), rgb(0 0 0 / 0)) left center / 12px 100% no-repeat scroll,
+    radial-gradient(farthest-side at 100% 50%, rgb(0 0 0 / 22%), rgb(0 0 0 / 0)) right center / 12px 100% no-repeat scroll; }
+.document-content th, .document-content td { min-width: 6ch; padding: 6px 10px; border: 1px solid #d5dfda; text-align: left; vertical-align: top; }
+.document-content th { min-width: 12ch; background: rgb(38 54 48 / 6%); color: #263630; font-weight: 650; }
+.document-content tbody tr:nth-child(even) td { background: rgb(38 54 48 / 3%); }
+.document-content td code, .document-content th code { white-space: nowrap; }
 .empty-documents { color: #64716d; }
 
 .annotatable:focus-visible { outline: 2px solid #9bcebc; outline-offset: 2px; border-radius: 3px; }
