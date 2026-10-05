@@ -119,6 +119,24 @@ While a form is waiting, the command keeps `~/.ask-questions/pending/<id>.json` 
 ask-questions --open   # JSON array; state is "pending", or "abandoned" once for an entry whose process died (its file is then deleted)
 ```
 
+Close a waiting form (and the server process behind it) by id, using the pending record:
+
+```sh
+ask-questions --close <id>   # SIGTERM to the recorded pid (SIGKILL after 3 s), then the record is removed
+```
+
+A record whose process is gone, or whose pid now belongs to another program, is refused with exit 1 and nothing is signalled; its stale file is removed.
+
+## Launching from an agent
+
+Launch the command in the foreground of a harness background task (for example the Bash tool with `run_in_background: true`):
+
+```sh
+ask-questions --file request.json --no-open
+```
+
+The command blocks until the form is submitted or cancelled, then exits and prints the result on stdout (`answersFile` and `submittedAt` on submit). The harness notifies the session when the task exits, so no polling is needed. Never launch it detached as `( ask-questions ... & )`: nothing then notifies the session on submit, and sessions have reported submitted forms as still open.
+
 ## Serving across two machines on the same tailnet
 
 By default the server binds to `127.0.0.1` — reachable only from the machine running it. Add `--tailnet` to bind instead to this machine's Tailscale IPv4 address (from `tailscale ip -4`) and print a URL that works from any other device on the same tailnet:

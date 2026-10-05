@@ -6,7 +6,7 @@ import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { homedir } from 'node:os';
 import { randomBytes } from 'node:crypto';
-import { execFile, spawn } from 'node:child_process';
+import { execFile, execFileSync, spawn } from 'node:child_process';
 import MarkdownIt from 'markdown-it';
 import { ContractError, parseArguments, resolveDocumentPath, validateAnnotations, validateAnswers, validatePayload } from '../lib/contract.js';
 import { installBlockAnchors } from '../lib/blockAnchor.js';
@@ -45,6 +45,7 @@ Usage:
   printf '%s' '{"version":1,"questions":[...]}' | ask-questions [--no-open] [--ding|--no-ding] [--tailnet]
   ask-questions --recent [COUNT]
   ask-questions --open
+  ask-questions --close FORM_ID
   ask-questions --show ANSWERS_ID
 
 Local installation for this proof of concept:
@@ -77,6 +78,13 @@ Options:
                      ~/.ask-questions/pending/<id>.json when its URL is ready and removes it on
                      submit or cancel. An entry whose process has died is listed once with
                      state "abandoned" and its file is deleted. Cannot be combined with
+                     --json, --file, --recent or --show.
+  --close FORM_ID    Do not open a form. Close the waiting form whose id is FORM_ID (an id from
+                     --open): sends SIGTERM to its recorded pid, which cancels the form and shuts
+                     its server down (SIGKILL after 3 seconds if it lingers), then removes its
+                     pending file. Prints {"closed":"<id>","pid":N} and exits 0. A record whose
+                     process is gone, or whose pid now belongs to some other program, is refused
+                     with exit 1 and its stale file is removed. Cannot be combined with --open,
                      --json, --file, --recent or --show.
   --recent [COUNT]   Do not open a form. Print the COUNT most recent saved answer files
                      (newest first) as a single JSON array to stdout, and exit 0. COUNT
@@ -131,6 +139,13 @@ Document rules:
   keep paths in that base directory. Files are read into memory before the server starts; the
   server never serves arbitrary files. The message and documents accept Markdown. Markdown raw
   HTML is disabled. Unsafe link schemes are neutralized.
+
+Launching from an agent:
+  Run the command in the foreground of a harness background task (for example Bash with
+  run_in_background: true). It blocks until Submit or Cancel, then exits and prints the result
+  (answersFile and submittedAt on submit), so the harness notifies the session with no polling.
+  Never launch it as a detached shell job such as ( ask-questions ... & ): nothing notifies the
+  session when the form is submitted. Close a form with ask-questions --close FORM_ID.
 
 Lifecycle and output:
   A private server binds to 127.0.0.1 on a selected port. Its random session-token URL and
@@ -499,6 +514,37 @@ export async function listOpenForms({ isAlive = pidAlive } = {}) {
   return records.sort((a, b) => String(a.startedAt).localeCompare(String(b.startedAt)));
 }
 
+function processCommand(pid) {
+  try { return execFileSync('ps', ['-o', 'command=', '-p', String(pid)], { encoding: 'utf8' }).trim(); } catch { return ''; }
+}
+
+// Closes a waiting form by the pid in its pending record. The process itself is the server (the
+// CLI is not wrapped), so SIGTERM cancels the form and closes the server. A record that is stale
+// (process gone, or pid reused by another program) is refused and its file removed.
+export async function closeForm(id, { killFn = process.kill, commandOf = processCommand, graceMs = 3_000, sleep = (ms) => new Promise((r) => setTimeout(r, ms)) } = {}) {
+  if (!/^[a-f0-9]+$/.test(id)) throw new ContractError(`--close needs a form id from ask-questions --open, not ${JSON.stringify(id)}.`);
+  const file = resolve(pendingDirectory(), `${id}.json`);
+  let record;
+  try { record = JSON.parse(await readFile(file, 'utf8')); } catch (error) {
+    if (error.code === 'ENOENT') throw new ContractError(`no waiting form has id ${id}.`);
+    throw new ContractError(`the pending record for ${id} is unreadable: ${error.message}`);
+  }
+  if (!pidAlive(record.pid, killFn)) {
+    await removePending(id);
+    throw new ContractError(`form ${id} is stale: process ${record.pid} is gone. Its record was removed.`);
+  }
+  if (!/ask-questions/.test(commandOf(record.pid))) {
+    await removePending(id);
+    throw new ContractError(`form ${id} is stale: pid ${record.pid} is no longer an ask-questions process. Nothing was signalled; its record was removed.`);
+  }
+  killFn(record.pid, 'SIGTERM');
+  const deadline = Date.now() + graceMs;
+  while (pidAlive(record.pid, killFn) && Date.now() < deadline) await sleep(50);
+  if (pidAlive(record.pid, killFn)) { try { killFn(record.pid, 'SIGKILL'); } catch { /* already gone */ } }
+  await removePending(id);
+  return { closed: id, pid: record.pid };
+}
+
 // `tailscale ip -4` is the one lookup: it needs neither a login check nor a daemon socket path,
 // and it fails fast (ENOENT or a non-zero exit) when Tailscale is not installed or not up.
 export function resolveBindAddress(useTailnet, { execFileFn = execFile, write = (text) => process.stderr.write(text) } = {}) {
@@ -617,8 +663,10 @@ async function serve(payload, documents, messageHtml, messageBlockText, anchors,
   if (!noOpen) openBrowser(url);
   const interrupt = () => completeOnce({ version: 1, status: 'cancelled', ...metadata, answers: {}, annotations: {} });
   process.once('SIGINT', interrupt);
+  process.once('SIGTERM', interrupt);
   const result = await finished;
   process.removeListener('SIGINT', interrupt);
+  process.removeListener('SIGTERM', interrupt);
   await removePending(pendingId).catch(() => {});
   await new Promise((resolveClose) => server.close(resolveClose));
   return result;
@@ -635,6 +683,10 @@ export async function main(argv = process.argv.slice(2)) {
     }
     if (args.open) {
       process.stdout.write(`${JSON.stringify(await listOpenForms())}\n`);
+      return 0;
+    }
+    if (args.close !== undefined) {
+      process.stdout.write(`${JSON.stringify(await closeForm(args.close))}\n`);
       return 0;
     }
     if (args.show !== undefined) {
