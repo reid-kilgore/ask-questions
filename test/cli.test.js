@@ -866,3 +866,89 @@ test('a cancelled form removes its pending file', async () => {
     await rm(fakeHome, { recursive: true, force: true });
   }
 });
+
+test('foreground run blocks until submit, then exits 0 printing answersFile and submittedAt', async () => {
+  const fakeHome = await mkdtemp(join(tmpdir(), 'ask-questions-home-'));
+  const env = { ...withoutTmux(), HOME: fakeHome };
+  const input = JSON.stringify({ version: 1, questions: [{ id: 'go', prompt: 'Continue?', type: 'single', required: true, options: [{ value: 'yes', label: 'Yes' }] }] });
+  const session = startCli(['--no-open', '--no-ding'], input, process.cwd(), env);
+  try {
+    const url = await waitForUrl(session);
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    assert.equal(session.child.exitCode, null, 'the command must still be running before submit');
+    assert.equal(session.output().stdout, '');
+    await fetch(`${url}api/submit`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ answers: [{ questionId: 'go', value: 'yes', notes: '' }] }),
+    });
+    assert.equal((await session.closed).code, 0);
+    const result = JSON.parse(session.output().stdout);
+    assert.equal(result.status, 'submitted');
+    assert.ok(result.submittedAt);
+    assert.ok(result.answersFile.startsWith(fakeHome));
+  } finally {
+    await stopChild(session);
+    await rm(fakeHome, { recursive: true, force: true });
+  }
+});
+
+test('--close stops a waiting form process and removes its pending file', async () => {
+  const fakeHome = await mkdtemp(join(tmpdir(), 'ask-questions-home-'));
+  const env = { ...withoutTmux(), HOME: fakeHome };
+  const input = JSON.stringify({ version: 1, questions: [{ id: 'go', prompt: 'Continue?', type: 'text', required: false }] });
+  const session = startCli(['--no-open', '--no-ding'], input, process.cwd(), env);
+  try {
+    const url = await waitForUrl(session);
+    const listing = startCli(['--open'], '', process.cwd(), env);
+    await listing.closed;
+    const [form] = JSON.parse(listing.output().stdout);
+    const closer = startCli(['--close', form.id], '', process.cwd(), env);
+    assert.equal((await closer.closed).code, 0);
+    assert.deepEqual(JSON.parse(closer.output().stdout), { closed: form.id, pid: session.child.pid });
+    await session.closed;
+    assert.equal(JSON.parse(session.output().stdout).status, 'cancelled');
+    const { readdir } = await import('node:fs/promises');
+    assert.deepEqual(await readdir(join(fakeHome, '.ask-questions', 'pending')), []);
+    await assert.rejects(fetch(url));
+  } finally {
+    await stopChild(session);
+    await rm(fakeHome, { recursive: true, force: true });
+  }
+});
+
+test('--close refuses a stale record, an unknown id and a reused pid, and signals nothing', async () => {
+  const fakeHome = await mkdtemp(join(tmpdir(), 'ask-questions-home-'));
+  const env = { ...withoutTmux(), HOME: fakeHome };
+  const { mkdir } = await import('node:fs/promises');
+  await mkdir(join(fakeHome, '.ask-questions', 'pending'), { recursive: true });
+  const record = (id, pid) => writeFile(join(fakeHome, '.ask-questions', 'pending', `${id}.json`), JSON.stringify({ id, title: 'x', url: 'http://127.0.0.1:1/x/', startedAt: '2026-01-01T00:00:00.000Z', pid, askerPath: '/x' }));
+  // A live process that is not ask-questions: this test process's parent shell is not guaranteed, so use a sleep child.
+  const bystander = spawn('sleep', ['30']);
+  try {
+    await record('dead01', 2 ** 22 + 12345);
+    await record('aa5ed1', bystander.pid);
+    const dead = startCli(['--close', 'dead01'], '', process.cwd(), env);
+    assert.equal((await dead.closed).code, 1);
+    assert.match(dead.output().stderr, /stale/);
+    const reused = startCli(['--close', 'aa5ed1'], '', process.cwd(), env);
+    assert.equal((await reused.closed).code, 1);
+    assert.match(reused.output().stderr, /no longer an ask-questions process/);
+    assert.equal(bystander.exitCode, null);
+    assert.equal(bystander.signalCode, null);
+    const { readdir } = await import('node:fs/promises');
+    assert.deepEqual(await readdir(join(fakeHome, '.ask-questions', 'pending')), []);
+    const unknown = startCli(['--close', 'abc123'], '', process.cwd(), env);
+    assert.equal((await unknown.closed).code, 1);
+    assert.match(unknown.output().stderr, /no waiting form/);
+  } finally {
+    bystander.kill();
+    await rm(fakeHome, { recursive: true, force: true });
+  }
+});
+
+test('--close is refused together with --open', async () => {
+  const session = startCli(['--close', 'abc', '--open']);
+  assert.equal((await session.closed).code, 1);
+  assert.match(session.output().stderr, /--close cannot be combined/);
+});
