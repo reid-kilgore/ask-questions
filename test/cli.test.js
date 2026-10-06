@@ -10,6 +10,10 @@ import { validatePayload } from '../lib/contract.js';
 
 const command = ['node', resolve('bin/ask-questions.js')];
 
+// Form launches read the user's real presence record; point every test at a file that does not
+// exist so a record of "away" on this machine cannot refuse the test forms.
+process.env.MAESTRO_PRESENCE_FILE = join(tmpdir(), `ask-questions-no-presence-${process.pid}.json`);
+
 // Strip tmux variables so spawned-CLI tests behave the same whether or not the test runner
 // itself is inside tmux. Tests that exercise the tmux feature on purpose pass their own env.
 function withoutTmux(env = process.env) {
@@ -951,4 +955,105 @@ test('--close is refused together with --open', async () => {
   const session = startCli(['--close', 'abc', '--open']);
   assert.equal((await session.closed).code, 1);
   assert.match(session.output().stderr, /--close cannot be combined/);
+});
+
+async function presenceFixture(record) {
+  const dir = await mkdtemp(join(tmpdir(), 'ask-questions-presence-'));
+  const file = join(dir, 'presence.json');
+  if (record) await writeFile(file, JSON.stringify({ version: 1, state: 'away', note: null, setBy: 'test', setAt: '2026-10-06T10:00:00.000Z', expiresAt: null, ...record }));
+  return { dir, file, env: { ...withoutTmux(), MAESTRO_PRESENCE_FILE: file } };
+}
+
+const presencePayload = JSON.stringify({ version: 1, questions: [{ id: 'go', prompt: 'Continue?', type: 'text' }] });
+
+test('presence: while away a form launch is refused with the note and the exact tg command', async () => {
+  const { dir, env } = await presenceFixture({ note: 'commuting, use Telegram' });
+  try {
+    const session = startCli(['--json', presencePayload, '--no-open', '--no-ding'], '', process.cwd(), env);
+    const { code } = await session.closed;
+    const { stdout, stderr } = session.output();
+    assert.equal(code, 1);
+    assert.equal(stdout, '');
+    assert.match(stderr, /refused\. Reid is away/);
+    assert.match(stderr, /Presence note: commuting, use Telegram/);
+    assert.ok(stderr.includes(`tg ask --json '${presencePayload}'`));
+    assert.match(stderr, /--ignore-presence/);
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});
+
+test('presence: the refusal names tg ask --file for a file launch and never opens a server', async () => {
+  const { dir, env } = await presenceFixture({ note: 'away' });
+  try {
+    const request = join(dir, 'request.json');
+    await writeFile(request, presencePayload);
+    const session = startCli(['--file', request, '--no-open'], '', process.cwd(), env);
+    const { code } = await session.closed;
+    assert.equal(code, 1);
+    assert.ok(session.output().stderr.includes(`tg ask --file '${request}'`));
+    assert.doesNotMatch(session.output().stderr, /http:\/\//);
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});
+
+test('presence: --ignore-presence launches the form despite an away record', async () => {
+  const { dir, env } = await presenceFixture({ note: 'stale' });
+  const session = startCli(['--json', presencePayload, '--no-open', '--no-ding', '--ignore-presence'], '', process.cwd(), env);
+  try {
+    const url = await waitForUrl(session);
+    assert.match(url, /^http:\/\/127\.0\.0\.1:/);
+  } finally {
+    await stopChild(session);
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('presence: an expired away record, a present record, and no record all launch the form', async () => {
+  for (const record of [{ expiresAt: '2020-01-01T00:00:00.000Z' }, { state: 'present' }, undefined]) {
+    const { dir, env } = await presenceFixture(record);
+    const session = startCli(['--json', presencePayload, '--no-open', '--no-ding'], '', process.cwd(), env);
+    try {
+      assert.match(await waitForUrl(session), /^http:\/\//);
+    } finally {
+      await stopChild(session);
+      await rm(dir, { recursive: true, force: true });
+    }
+  }
+});
+
+test('presence: clearing the record (tg presence present) lets the next launch through; --presence prints the reading', async () => {
+  const { dir, file, env } = await presenceFixture({ note: 'commuting' });
+  try {
+    const shown = startCli(['--presence'], '', process.cwd(), env);
+    assert.equal((await shown.closed).code, 0);
+    const reading = JSON.parse(shown.output().stdout);
+    assert.equal(reading.state, 'away');
+    assert.equal(reading.record.note, 'commuting');
+
+    await writeFile(file, JSON.stringify({ version: 1, state: 'present', note: null, setBy: 'hook:UserPromptSubmit', setAt: '2026-10-06T11:00:00.000Z', expiresAt: null }));
+    const after = startCli(['--presence'], '', process.cwd(), env);
+    await after.closed;
+    assert.equal(JSON.parse(after.output().stdout).state, 'present');
+
+    const session = startCli(['--json', presencePayload, '--no-open', '--no-ding'], '', process.cwd(), env);
+    try { assert.match(await waitForUrl(session), /^http:\/\//); } finally { await stopChild(session); }
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});
+
+test('presence: management modes are never refused while away', async () => {
+  const { dir, env } = await presenceFixture({ note: 'away' });
+  try {
+    const open = startCli(['--open'], '', process.cwd(), env);
+    assert.equal((await open.closed).code, 0);
+    const recent = startCli(['--recent'], '', process.cwd(), env);
+    assert.equal((await recent.closed).code, 0);
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});
+
+test('presence: the refusal warns when the payload holds a quiz question, which tg ask rejects', async () => {
+  const { dir, env } = await presenceFixture({ note: 'away' });
+  try {
+    const quiz = JSON.stringify({ version: 1, questions: [{ id: 'q', prompt: 'p', type: 'quiz', answer: 'a', options: [{ value: 'a', label: 'A' }] }] });
+    const session = startCli(['--json', quiz, '--no-open'], '', process.cwd(), env);
+    await session.closed;
+    assert.match(session.output().stderr, /tg ask rejects type "quiz"/);
+  } finally { await rm(dir, { recursive: true, force: true }); }
 });

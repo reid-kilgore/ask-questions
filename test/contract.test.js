@@ -79,7 +79,7 @@ test('rejects a document symlink that points outside the input directory', async
   }
 });
 
-const defaultParsedArguments = { help: false, json: undefined, file: undefined, noOpen: false, ding: true, tailnet: false, recent: false, recentCount: 10, show: undefined, open: false, close: undefined };
+const defaultParsedArguments = { help: false, json: undefined, file: undefined, noOpen: false, ding: true, tailnet: false, recent: false, recentCount: 10, show: undefined, open: false, close: undefined, presence: false, ignorePresence: false };
 
 test('parses ding as enabled by default and lets the last ding flag win', () => {
   assert.deepEqual(parseArguments(['--json', '{}']), { ...defaultParsedArguments, json: '{}' });
@@ -258,4 +258,11 @@ test('rejects allowOther on a quiz question', () => {
     questions: [{ id: 'quiz-1', prompt: 'Pick', type: 'quiz', answer: 'a', allowOther: true, options: [{ value: 'a', label: 'A' }] }],
   };
   assert.throws(() => validatePayload(quizPayload), ContractError);
+});
+
+test('parses --presence and --ignore-presence, and rejects --presence with a launch or other mode', () => {
+  assert.deepEqual(parseArguments(['--presence']), { ...defaultParsedArguments, presence: true });
+  assert.deepEqual(parseArguments(['--json', '{}', '--ignore-presence']), { ...defaultParsedArguments, json: '{}', ignorePresence: true });
+  assert.throws(() => parseArguments(['--presence', '--json', '{}']), ContractError);
+  assert.throws(() => parseArguments(['--presence', '--open']), ContractError);
 });

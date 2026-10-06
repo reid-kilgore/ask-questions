@@ -10,6 +10,7 @@ import { execFile, execFileSync, spawn } from 'node:child_process';
 import MarkdownIt from 'markdown-it';
 import { ContractError, parseArguments, resolveDocumentPath, validateAnnotations, validateAnswers, validatePayload } from '../lib/contract.js';
 import { installBlockAnchors } from '../lib/blockAnchor.js';
+import { readPresence, refusalMessage } from '../lib/presence.js';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const criticmarkupPath = resolve(root, 'node_modules/criticmarkup/src/index.js');
@@ -47,6 +48,7 @@ Usage:
   ask-questions --open
   ask-questions --close FORM_ID
   ask-questions --show ANSWERS_ID
+  ask-questions --presence
 
 Local installation for this proof of concept:
   npm install
@@ -86,6 +88,19 @@ Options:
                      process is gone, or whose pid now belongs to some other program, is refused
                      with exit 1 and its stale file is removed. Cannot be combined with --open,
                      --json, --file, --recent or --show.
+  --presence         Do not open a form. Print the recorded presence state as JSON
+                     {state,reason,record}. Presence is set with tg presence away|present
+                     (~/.maestro/presence.json, or $MAESTRO_PRESENCE_FILE). While it reads
+                     away, launching a form is refused (exit 1): the message gives the presence
+                     note and the tg ask command to use instead. An away record past its expiry
+                     reads as present. Cannot be combined with --open, --close, --recent, --show,
+                     --json or --file. Sessions: when Reid says he is leaving or commuting, run
+                     tg presence away --note "<his words>"; when he says he is back, run
+                     tg presence present. Do not use --ignore-presence yourself unless Reid
+                     is typing to you right now. tg ask takes the same payload but rejects
+                     "quiz" questions.
+  --ignore-presence  Launch the form even while presence reads away. Use when Reid is at the
+                     desk and the record is stale.
   --recent [COUNT]   Do not open a form. Print the COUNT most recent saved answer files
                      (newest first) as a single JSON array to stdout, and exit 0. COUNT
                      defaults to 10. Cannot be combined with --json, --file, or --show.
@@ -689,6 +704,10 @@ export async function main(argv = process.argv.slice(2)) {
       process.stdout.write(`${JSON.stringify(await closeForm(args.close))}\n`);
       return 0;
     }
+    if (args.presence) {
+      process.stdout.write(`${JSON.stringify(readPresence())}\n`);
+      return 0;
+    }
     if (args.show !== undefined) {
       const record = await readAnswerById(args.show);
       if (!record) {
@@ -697,6 +716,13 @@ export async function main(argv = process.argv.slice(2)) {
       }
       process.stdout.write(`${JSON.stringify(record)}\n`);
       return 0;
+    }
+    if (!args.ignorePresence) {
+      const presence = readPresence();
+      if (presence.state === 'away') {
+        process.stderr.write(refusalMessage(presence, args));
+        return 1;
+      }
     }
     const askerPath = process.cwd();
     const askerTmuxWindow = await lookupTmuxWindow();
