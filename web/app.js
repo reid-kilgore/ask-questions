@@ -953,3 +953,55 @@ onAnnotationsChanged(() => {
   annotationCount.textContent = String(listAnnotations().length);
   if (annotationPanel.classList.contains('open')) renderAnnotationPanel();
 });
+
+// --- Mermaid diagrams --------------------------------------------------------
+// The server renders a ```mermaid fence as <pre data-diagram="mermaid"> holding the source.
+// Here the browser draws a diagram next to it and hides the source (it stays in the DOM, so
+// annotation offsets still match). If the library cannot load or the source does not parse,
+// the source stays visible as a code block. Annotation re-renders replace the HTML, so a
+// MutationObserver redraws from a cache.
+const MERMAID_URL = 'https://cdn.jsdelivr.net/npm/mermaid@12.1.0/dist/mermaid.esm.min.mjs';
+let mermaidLoad;
+let mermaidCounter = 0;
+const mermaidCache = new Map();
+
+function loadMermaid() {
+  mermaidLoad ??= import(MERMAID_URL).then((module) => {
+    const mermaid = module.default;
+    mermaid.initialize({ startOnLoad: false, securityLevel: 'strict', theme: 'neutral' });
+    return mermaid;
+  });
+  return mermaidLoad;
+}
+
+function showDiagram(pre, svgMarkup) {
+  const figure = document.createElement('figure');
+  figure.className = 'diagram diagram-mermaid';
+  figure.innerHTML = svgMarkup;
+  pre.after(figure);
+  pre.classList.add('diagram-source-hidden');
+}
+
+async function upgradeMermaid(pre) {
+  pre.dataset.diagramState = 'pending';
+  const source = pre.textContent;
+  try {
+    if (!mermaidCache.has(source)) {
+      const mermaid = await loadMermaid();
+      const { svg } = await mermaid.render(`mermaid-diagram-${mermaidCounter++}`, source);
+      mermaidCache.set(source, svg);
+    }
+    if (pre.isConnected) showDiagram(pre, mermaidCache.get(source));
+  } catch (error) {
+    pre.dataset.diagramState = 'failed';
+    pre.title = `Diagram could not be drawn (${error?.message ?? 'unknown error'}); showing the source.`;
+    document.querySelectorAll('[id^="dmermaid-diagram-"]').forEach((leftover) => leftover.remove());
+  }
+}
+
+function upgradeDiagrams() {
+  for (const pre of document.querySelectorAll('pre[data-diagram="mermaid"]:not([data-diagram-state])')) upgradeMermaid(pre);
+}
+
+new MutationObserver(upgradeDiagrams).observe(document.body, { childList: true, subtree: true });
+upgradeDiagrams();

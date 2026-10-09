@@ -9,11 +9,12 @@
   },
   "scripts": {
     "test": "node --test",
-    "check": "node --check bin/ask-questions.js && node --check lib/contract.js && node --check lib/blockAnchor.js && node --check web/app.js && node --check web/annotate.js"
+    "check": "node --check bin/ask-questions.js && node --check lib/contract.js && node --check lib/blockAnchor.js && node --check lib/pictures.js && node --check web/app.js && node --check web/annotate.js"
   },
   "dependencies": {
     "criticmarkup": "file:../criticmarkup",
-    "markdown-it": "^14.1.0"
+    "markdown-it": "^14.1.0",
+    "sanitize-html": "^2.18.0"
   },
   "devDependencies": {
     "playwright": "^1.63.0"

@@ -10,6 +10,7 @@ import { execFile, execFileSync, spawn } from 'node:child_process';
 import MarkdownIt from 'markdown-it';
 import { ContractError, parseArguments, resolveDocumentPath, validateAnnotations, validateAnswers, validatePayload } from '../lib/contract.js';
 import { installBlockAnchors } from '../lib/blockAnchor.js';
+import { createImageRegistry, installDiagramFences, localizeImages } from '../lib/pictures.js';
 import { readPresence, refusalMessage } from '../lib/presence.js';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -17,6 +18,7 @@ const criticmarkupPath = resolve(root, 'node_modules/criticmarkup/src/index.js')
 const markdown = new MarkdownIt({ html: false, linkify: true, typographer: true });
 const defaultLinkOpen = markdown.renderer.rules.link_open ?? ((tokens, index, options, _environment, self) => self.renderToken(tokens, index, options));
 installBlockAnchors(markdown);
+installDiagramFences(markdown);
 
 function isSafeMarkdownLink(href) {
   try {
@@ -154,6 +156,30 @@ Document rules:
   keep paths in that base directory. Files are read into memory before the server starts; the
   server never serves arbitrary files. The message and documents accept Markdown. Markdown raw
   HTML is disabled. Unsafe link schemes are neutralized.
+
+Pictures (expected when the question is about a design choice, a flow, or a re-taught quiz miss):
+  Show the picture in the message or in a document; a diagram beats a paragraph of description.
+  Three forms work in any Markdown field (the message and documents):
+    Mermaid diagram   a fenced block tagged mermaid, drawn as a diagram in the page:
+                        \`\`\`mermaid
+                        flowchart LR
+                          Client --> API --> DB
+                        \`\`\`
+                      The mermaid library loads from a pinned CDN URL, so the page needs internet
+                      access. If it fails to load, the source shows as a code block.
+    Inline SVG        a fenced block tagged svg, drawn as an image after sanitising (scripts, event
+                      handlers, foreignObject, style, and external references are removed):
+                        \`\`\`svg
+                        <svg viewBox="0 0 40 20"><rect width="40" height="20" fill="#cde"/></svg>
+                        \`\`\`
+    Image file        ![alt text](diagrams/flow.png)
+                      The path is relative to the payload file directory for --file, and to the
+                      current directory for --json or stdin, like document paths. Only png, jpg,
+                      jpeg, gif, webp and svg files are served, only the ones the payload
+                      references, and only from inside that directory. A missing file, a path
+                      that leaves the directory (.. or a symbolic link out), or another file type
+                      stops the launch with an error.
+  Option descriptions and prompts are plain text, so put pictures in the message or a document.
 
 Launching from an agent:
   Run the command in the foreground of a harness background task (for example Bash with
@@ -328,24 +354,29 @@ async function readPayload(args) {
   // plain text — the single authority the browser's annotation offsets and
   // the server's later validation both anchor to. It travels to the page
   // alongside `html` so the browser never has to reconstruct it itself.
-  const renderMarkdown = (source) => {
+  // Local images (![alt](relative/path.png)) are resolved against baseDirectory, checked, and
+  // recorded in `images`; the server serves only what is recorded there.
+  const images = createImageRegistry();
+  const renderMarkdown = async (source) => {
     const env = {};
-    const html = markdown.render(source, env);
+    const tokens = markdown.parse(source, env);
+    await localizeImages(tokens, baseDirectory, images);
+    const html = markdown.renderer.render(tokens, markdown.options, env);
     return { html, blockText: env.blockText };
   };
   const documents = await Promise.all((payload.documents ?? []).map(async (document) => {
-    if (document.markdown !== undefined) return { id: document.id, title: document.title, ...renderMarkdown(document.markdown) };
+    if (document.markdown !== undefined) return { id: document.id, title: document.title, ...(await renderMarkdown(document.markdown)) };
     const documentPath = await resolveDocumentPath(baseDirectory, document.path);
     let sourceMarkdown;
     try { sourceMarkdown = await readFile(documentPath, 'utf8'); } catch (error) { throw new ContractError(`Cannot read document ${document.path}: ${error.message}`); }
-    return { id: document.id, title: document.title, ...renderMarkdown(sourceMarkdown) };
+    return { id: document.id, title: document.title, ...(await renderMarkdown(sourceMarkdown)) };
   }));
-  const message = payload.message ? renderMarkdown(payload.message) : undefined;
+  const message = payload.message ? await renderMarkdown(payload.message) : undefined;
   const anchors = {
     message: message?.blockText ?? null,
     documents: Object.fromEntries(documents.map((document) => [document.id, document.blockText])),
   };
-  return { payload, documents, messageHtml: message?.html, messageBlockText: message?.blockText, anchors };
+  return { payload, documents, messageHtml: message?.html, messageBlockText: message?.blockText, anchors, images };
 }
 
 function send(response, status, contentType, body) {
@@ -577,7 +608,7 @@ export function resolveBindAddress(useTailnet, { execFileFn = execFile, write = 
   });
 }
 
-async function serve(payload, documents, messageHtml, messageBlockText, anchors, { noOpen, ding, askerPath, askerTmuxWindow, tailnet }) {
+async function serve(payload, documents, messageHtml, messageBlockText, anchors, { noOpen, ding, askerPath, askerTmuxWindow, tailnet, images }) {
   const metadata = askerMetadata(askerPath, askerTmuxWindow);
   const token = randomBytes(24).toString('hex');
   const index = await staticFile('index.html');
@@ -621,6 +652,22 @@ async function serve(payload, documents, messageHtml, messageBlockText, anchors,
       // own; criticmarkup is zero-dependency plain ESM, so it is served
       // verbatim from node_modules rather than copied into this repo.
       if (request.method === 'GET' && suffix === '/vendor/criticmarkup.js') return send(response, 200, 'application/javascript; charset=utf-8', criticmarkup);
+      // Only images the payload referenced (recorded in `images` at launch) are served.
+      // The id must match a registry key exactly, so nothing else on disk is reachable.
+      if (request.method === 'GET' && suffix.startsWith('/img/')) {
+        const entry = images?.files.get(suffix.slice('/img/'.length));
+        if (!entry) return send(response, 404, 'text/plain; charset=utf-8', 'Not found');
+        let data;
+        try { data = await readFile(entry.path); } catch { return send(response, 404, 'text/plain; charset=utf-8', 'Not found'); }
+        response.writeHead(200, {
+          'Content-Type': entry.type,
+          'Cache-Control': 'no-store',
+          'X-Content-Type-Options': 'nosniff',
+          'Content-Security-Policy': "default-src 'none'; style-src 'unsafe-inline'; sandbox",
+        });
+        response.end(data);
+        return;
+      }
       if (request.method === 'GET' && suffix === '/api/session') return send(response, 200, 'application/json; charset=utf-8', JSON.stringify({ title: payload.title, messageHtml, messageBlockText, questions: payload.questions, documents, ...metadata }));
       if (request.method === 'POST' && suffix === '/api/submit') {
         const body = await requestBody(request);
@@ -726,8 +773,8 @@ export async function main(argv = process.argv.slice(2)) {
     }
     const askerPath = process.cwd();
     const askerTmuxWindow = await lookupTmuxWindow();
-    const { payload, documents, messageHtml, messageBlockText, anchors } = await readPayload(args);
-    const result = await serve(payload, documents, messageHtml, messageBlockText, anchors, { ...args, askerPath, askerTmuxWindow });
+    const { payload, documents, messageHtml, messageBlockText, anchors, images } = await readPayload(args);
+    const result = await serve(payload, documents, messageHtml, messageBlockText, anchors, { ...args, askerPath, askerTmuxWindow, images });
     process.stdout.write(`${JSON.stringify(result)}\n`);
     return result.status === 'submitted' ? 0 : 2;
   } catch (error) {

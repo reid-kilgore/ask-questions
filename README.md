@@ -92,13 +92,34 @@ Alongside `answers`, the result carries a top-level `annotations` object — alw
 
 ## Documents, options, and other detail
 
-Supporting documents use unique `id` and `title` values, and each has exactly one of inline `markdown` or a relative `path` (resolved against the payload file's directory for `--file`, or the current directory for `--json`/stdin — a document path can't escape that directory). The introductory `message`, documents, and option descriptions all accept Markdown; raw HTML is disabled and unsafe link schemes are neutralized. `--help` covers the full payload schema, including choice questions, the built-in `Other` free-text option, and required questions.
+Supporting documents use unique `id` and `title` values, and each has exactly one of inline `markdown` or a relative `path` (resolved against the payload file's directory for `--file`, or the current directory for `--json`/stdin — a document path can't escape that directory). The introductory `message` and documents accept Markdown (option descriptions and prompts are plain text); raw HTML is disabled and unsafe link schemes are neutralized. `--help` covers the full payload schema, including choice questions, the built-in `Other` free-text option, and required questions.
 
 Every result also contains `askerPath`, the absolute directory the command was run from (a payload can't set or override it), shown in the browser as **Asked from**. Inside tmux, `askerTmuxWindow` is included too when the current window's name can be looked up.
 
 There is no built-in answer timeout — a human can take hours. The command just blocks until Submit, Cancel, or Ctrl-C; calling agents need to disable their own execution timeout (or set it to several hours) rather than treat normal waiting as a failure.
 
 The ready sound plays once the page is ready and is on by default; use `--no-ding` to turn it off. `--no-open` skips launching a browser automatically — useful for automation — the session URL is always printed to standard error regardless, as a plain line or (when standard error is a terminal) also as a clickable OSC 8 hyperlink.
+
+## Pictures
+
+Pictures are expected, not optional, when a question is about a design choice, a flow, or a re-taught quiz miss: show the diagram instead of describing it. Put them in the `message` or a document. Three forms work:
+
+````markdown
+```mermaid
+flowchart LR
+  Client --> API --> DB
+```
+
+```svg
+<svg viewBox="0 0 40 20"><rect width="40" height="20" fill="#cde"/></svg>
+```
+
+![checkout flow](diagrams/checkout.png)
+````
+
+- **Mermaid.** A `mermaid` fenced block is drawn as a diagram. The page loads Mermaid from a pinned jsDelivr URL (nothing is vendored in this repository), so it needs internet access; if the library fails to load or the source does not parse, the source shows as a code block.
+- **Inline SVG.** An `svg` fenced block is sanitised on the server (scripts, event handlers, `foreignObject`, `style`, animation and external references are removed; only references to `#ids` inside the same SVG survive) and drawn as an image, using `sanitize-html`.
+- **Image files.** `![alt](relative/path.png)` resolves against the payload file's directory for `--file`, or the current directory for `--json`/stdin, like document paths. Only png, jpg, jpeg, gif, webp and svg files are served, only the ones the payload references, and only from inside that directory. A path that leaves it (`..` or a symbolic link), a missing file, or another file type stops the launch with an error. Remote `http(s)` images are left as written.
 
 ## Durable answers
 
