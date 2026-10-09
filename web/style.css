@@ -251,3 +251,10 @@ button.primary { background: #276755; color: #fff; }
   .actions #cancel { grid-column: 2; grid-row: 2; }
   .actions #next-question, .actions [type="submit"] { grid-column: 1 / -1; grid-row: 3; }
 }
+
+/* Pictures: mermaid and svg fences, and local images */
+.diagram { margin: 12px 0; padding: 12px; border: 1px solid #d5ddd9; border-radius: 6px; background: #fff; overflow-x: auto; text-align: center; }
+.diagram svg { max-width: 100%; height: auto; }
+.diagram-source-hidden { display: none; }
+pre[data-diagram-state="failed"]::before { content: "Diagram could not be drawn. Source:"; display: block; margin-bottom: 6px; font: 600 .8rem sans-serif; color: #8a4b00; }
+.message img, .documents-pane img { max-width: 100%; height: auto; border-radius: 4px; }
