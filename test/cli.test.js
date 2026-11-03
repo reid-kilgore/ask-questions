@@ -318,6 +318,10 @@ test('spawned session includes askerTmuxWindow when TMUX_PANE resolves to a wind
   const fakeTmux = join(binDirectory, 'tmux');
   await writeFile(fakeTmux, '#!/bin/sh\nprintf %s "review-work"\n');
   await chmod(fakeTmux, 0o755);
+  // The first run of a freshly written executable can take 140-380 ms on macOS (first-exec
+  // scan), longer than the CLI's 250 ms tmux lookup timeout. Run it once here so the scan is
+  // paid before the CLI starts; the CLI then sees the fast path a real, already-used tmux has.
+  await new Promise((done, fail) => execFile(fakeTmux, (error) => (error ? fail(error) : done())));
   const env = { ...withoutTmux(), TMUX_PANE: '%7', PATH: `${binDirectory}:${process.env.PATH}` };
   const input = JSON.stringify({ version: 1, questions: [{ id: 'stop', prompt: 'Continue?', type: 'text' }] });
   const session = startCli(['--no-open', '--no-ding'], input, process.cwd(), env);
