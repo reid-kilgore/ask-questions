@@ -5,6 +5,23 @@ const session = await fetch('api/session').then(async (response) => {
   return response.json();
 });
 
+// Quiz option order is shuffled once per page load, display only. The stored option values and
+// the grading are untouched. An author tends to put the right answer in a predictable slot, so a
+// fixed order would let a reader guess without knowing. Doing it once here, before anything renders,
+// keeps the order stable across re-renders and keeps every index-based lookup (the click handler,
+// the 1-9 keys) pointed at the order on screen. The form shows option labels only, never letters.
+function shuffled(items, random = Math.random) {
+  const copy = [...items];
+  for (let i = copy.length - 1; i > 0; i -= 1) {
+    const j = Math.floor(random() * (i + 1));
+    [copy[i], copy[j]] = [copy[j], copy[i]];
+  }
+  return copy;
+}
+session.questions.forEach((question) => {
+  if (question.type === 'quiz') question.options = shuffled(question.options);
+});
+
 const create = (name, properties = {}) => {
   const element = document.createElement(name);
   Object.assign(element, properties);
