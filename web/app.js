@@ -42,6 +42,9 @@ const quizLogEntries = new Map();
 
 document.title = session.title || 'Questions';
 document.querySelector('#page-title').textContent = session.title || 'Questions';
+// A form made only of quiz questions gets its own colour scheme (violet, with a Quiz badge in
+// the header) so it reads at a glance as a quiz and not as a decision. Mixed forms keep the default.
+if (session.questions.length > 0 && session.questions.every((question) => question.type === 'quiz')) document.body.classList.add('quiz-mode');
 const askerPath = document.querySelector('#asker-path');
 askerPath.textContent = session.askerPath;
 askerPath.title = 'Click to copy';
@@ -134,6 +137,10 @@ function renderQuizReveal(question, reveal, notesTextarea, questionIndex) {
   const verdict = create('p', { className: `quiz-verdict ${state.correct ? 'correct' : 'incorrect'}` });
   verdict.textContent = state.correct ? 'Correct.' : `Not quite — the spec says: ${correctOption?.label ?? question.answer}.`;
   reveal.append(verdict);
+  const chosenOption = question.options.find((option) => option.value === state.value);
+  if (!state.correct && chosenOption?.whyWrong) {
+    reveal.append(create('p', { className: 'quiz-why-wrong', textContent: `Why your choice was wrong: ${chosenOption.whyWrong}` }));
+  }
   if (question.why) reveal.append(create('p', { className: 'quiz-why', textContent: question.why }));
   if (question.cite) reveal.append(create('p', { className: 'quiz-cite', textContent: `“${question.cite}”` }));
   if (question.allowDisagree !== false) {
@@ -338,9 +345,12 @@ function renderQuizScore(answers) {
       const block = create('div', { className: 'quiz-score-block' });
       block.append(create('p', { textContent: question.prompt }));
       block.append(create('p', { textContent: summaryLine }));
+      const wrongOptions = question.options.filter((option) => option.value !== question.answer && option.whyWrong);
+      const wrongLines = wrongOptions.map((option) => `Why "${option.label}" is wrong: ${option.whyWrong}`);
+      wrongLines.forEach((line) => block.append(create('p', { className: 'quiz-why-wrong', textContent: line })));
       if (notes) block.append(create('p', { textContent: `Note: ${notes}` }));
       quizScoreEl.append(block);
-      lines.push(question.prompt, summaryLine);
+      lines.push(question.prompt, summaryLine, ...wrongLines);
       if (notes) lines.push(`Note: ${notes}`);
       lines.push('');
     });
@@ -706,6 +716,7 @@ function recordQuizAnswer(question, questionIndex, state) {
     optionLabel: chosenOption?.label ?? state.value,
     correct: state.correct,
     correctLabel: correctOption?.label ?? question.answer,
+    whyWrong: state.correct ? undefined : chosenOption?.whyWrong,
     why: question.why,
     cite: question.cite,
     disagree: state.disagree,
@@ -736,6 +747,7 @@ function renderQuizLog() {
       className: `quiz-verdict ${entry.correct ? 'correct' : 'incorrect'}`,
       textContent: entry.correct ? 'Correct.' : `Not quite — the spec says: ${entry.correctLabel}.`,
     }));
+    if (entry.whyWrong) item.append(create('p', { className: 'quiz-why-wrong', textContent: `Why your choice was wrong: ${entry.whyWrong}` }));
     if (entry.why) item.append(create('p', { className: 'quiz-why', textContent: entry.why }));
     if (entry.cite) item.append(create('p', { className: 'quiz-cite', textContent: `“${entry.cite}”` }));
     if (entry.disagree) item.append(create('p', { className: 'quiz-log-disagree', textContent: 'Disagreed with the spec.' }));

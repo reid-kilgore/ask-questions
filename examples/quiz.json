@@ -9,10 +9,10 @@
       "type": "quiz",
       "required": true,
       "options": [
-        { "value": "a", "label": "Accepted client-side, but refused server-side because the true cap is 365 days." },
+        { "value": "a", "label": "Accepted client-side, but refused server-side because the true cap is 365 days.", "whyWrong": "The cap is 366, not 365, and the server imports the same constant as the client, so a 366-day range is not refused server-side. The right answer says both sides use one predicate." },
         { "value": "b", "label": "Accepted on both sides. 366 is exactly at the cap; a 367-day range would be refused on both sides." },
-        { "value": "c", "label": "Accepted client-side but refused server-side, since the client is intentionally looser for a smoother UX." },
-        { "value": "d", "label": "Refused everywhere. A custom range beyond one pay period must go through the full builder, not the picker." }
+        { "value": "c", "label": "Accepted client-side but refused server-side, since the client is intentionally looser for a smoother UX.", "whyWrong": "Nothing in the spec makes the client looser than the server. Both sides share one predicate, so 366 days passes on both. The right answer rules out any client/server gap." },
+        { "value": "d", "label": "Refused everywhere. A custom range beyond one pay period must go through the full builder, not the picker.", "whyWrong": "The picker is the path for custom ranges up to the cap; nothing sends a long range to the full builder. The right answer shows 366 is simply accepted." }
       ],
       "answer": "b",
       "why": "REPORT_RANGE_MAX_DAYS = 366 is one exact predicate imported by both the client input and validateStructural on the server. Tests pin 366 accepted and 367 refused on both sides.",
@@ -24,10 +24,10 @@
       "type": "quiz",
       "required": true,
       "options": [
-        { "value": "a", "label": "It clamps the date down to the nearest value that fits under the cap." },
-        { "value": "b", "label": "The Run button disables, but the invalid date stays showing in the input." },
+        { "value": "a", "label": "It clamps the date down to the nearest value that fits under the cap.", "whyWrong": "The spec refuses the edit; it does not clamp it to a nearby value. The right answer keeps the old value and explains why." },
+        { "value": "b", "label": "The Run button disables, but the invalid date stays showing in the input.", "whyWrong": "The invalid date never stays in the input: the old value is restored. The right answer is about the input refusing the edit, not about disabling Run." },
         { "value": "c", "label": "The old value stays in the input, a reason shows underneath it, and nothing re-runs." },
-        { "value": "d", "label": "The report runs anyway and a coverage notice explains that part of the range was dropped." }
+        { "value": "d", "label": "The report runs anyway and a coverage notice explains that part of the range was dropped.", "whyWrong": "Nothing runs after a refused edit, so no coverage notice is produced. The right answer says nothing re-runs." }
       ],
       "answer": "c",
       "why": "D1 specifies the client behavior directly: a date input that would push rangeDayCount over 366, or set end before start, is refused. The old value stays, the reason shows under the input, and nothing re-runs.",
@@ -39,10 +39,10 @@
       "type": "quiz",
       "required": true,
       "options": [
-        { "value": "a", "label": "INVALID_RANGE, since the span cap is checked before anything else in the handler." },
+        { "value": "a", "label": "INVALID_RANGE, since the span cap is checked before anything else in the handler.", "whyWrong": "INVALID_RANGE fires after location authorisation, not before. The right answer puts FORBIDDEN first for a caller with no locations." },
         { "value": "b", "label": "FORBIDDEN, since location authorization runs before the range cap is evaluated." },
-        { "value": "c", "label": "Both errors, combined in a single response." },
-        { "value": "d", "label": "A 200 with an empty result and a coverage notice covering the whole requested range." }
+        { "value": "c", "label": "Both errors, combined in a single response.", "whyWrong": "The handler stops at the first failing check, so only one error comes back. The right answer is the earlier one, FORBIDDEN." },
+        { "value": "d", "label": "A 200 with an empty result and a coverage notice covering the whole requested range.", "whyWrong": "A caller with no authorised locations is refused with an error, not given an empty 200. The right answer is FORBIDDEN." }
       ],
       "answer": "b",
       "why": "INVALID_RANGE fires after location authorisation in the gauntlet, so a caller with no authorised locations gets FORBIDDEN first; the cap only guards the fact query, not the three checks that run before it.",
@@ -54,10 +54,10 @@
       "type": "quiz",
       "required": true,
       "options": [
-        { "value": "a", "label": "Because every Kronto company is assumed to share one timezone by policy." },
+        { "value": "a", "label": "Because every Kronto company is assumed to share one timezone by policy.", "whyWrong": "The spec makes no one-timezone assumption. The reason is how the fact query's edges round-trip to calendar dates, as the right answer explains." },
         { "value": "b", "label": "Because a Prisma where clause can't express AT TIME ZONE, and for a day-grain column the fact query's per-location edges already round-trip to those same two calendar dates, so per-location instants would just invite a second, drift-prone derivation of the edges." },
-        { "value": "c", "label": "Because coverage runs entirely on the client after the fact query returns, so timezones don't apply." },
-        { "value": "d", "label": "Because the design review required per-location instants and this is a deliberate compromise on cost." }
+        { "value": "c", "label": "Because coverage runs entirely on the client after the fact query returns, so timezones don't apply.", "whyWrong": "Coverage runs on the server against exported lines, so timezones are not dodged by moving it to the client. The right answer gives the real reason." },
+        { "value": "d", "label": "Because the design review required per-location instants and this is a deliberate compromise on cost.", "whyWrong": "The decision was chosen on purpose to avoid a second derivation of the edges, not as a cost compromise from review. The right answer names the drift risk." }
       ],
       "answer": "b",
       "why": "D2 chooses the query's own range.start/range.end on purpose: the fact query's per-location edges round-trip to exactly those two calendar dates for a day-grain column, and handing an implementer per-location instants invites the drift the PAS-5931 MUST-CHECK exists to prevent.",
@@ -69,10 +69,10 @@
       "type": "quiz",
       "required": true,
       "options": [
-        { "value": "a", "label": "Yes. Coverage is per employee, so the un-exported hours for that person are flagged even though something exported." },
+        { "value": "a", "label": "Yes. Coverage is per employee, so the un-exported hours for that person are flagged even though something exported.", "whyWrong": "Coverage is day-grained, not per employee, so one exported line covers the day for the location. The right answer states the day grain." },
         { "value": "b", "label": "No. Coverage is by day: any exported line on a day counts the whole day as covered, even when the export was only partial." },
-        { "value": "c", "label": "Yes, because PTO_ONLY and ADJUSTMENT lines are excluded from what counts as covered." },
-        { "value": "d", "label": "No, but only because supersedeOlderLines already removed the un-exported hours from the query entirely." }
+        { "value": "c", "label": "Yes, because PTO_ONLY and ADJUSTMENT lines are excluded from what counts as covered.", "whyWrong": "Line types do not decide this case: the exported WORK line already makes the day covered. The right answer rests on the day grain." },
+        { "value": "d", "label": "No, but only because supersedeOlderLines already removed the un-exported hours from the query entirely.", "whyWrong": "supersedeOlderLines does not remove un-exported hours from the query; the day is simply counted covered. The right answer gives the real rule." }
       ],
       "answer": "b",
       "why": "The spec states the limit explicitly in the notice copy itself and in D2: coverage is day-grained, not per employee, and a day with any exported line counts as covered, so a partly exported day can still show gaps.",
@@ -85,9 +85,9 @@
       "required": true,
       "options": [
         { "value": "a", "label": "Double OT hours. The product computes double OT nowhere today, so the label \"Total OT Hours (daily + weekly)\" states exactly what is summed." },
-        { "value": "b", "label": "Weekly OT for any straddling pay period. Those hours are silently dropped from the sum with no indication." },
-        { "value": "c", "label": "PTO and holiday hours, because those never count toward the overtime threshold under any configuration." },
-        { "value": "d", "label": "Pay amounts. The column is a dollar figure derived from the pay rate rather than a count of hours." }
+        { "value": "b", "label": "Weekly OT for any straddling pay period. Those hours are silently dropped from the sum with no indication.", "whyWrong": "The column does not silently drop weekly OT: it sums daily and weekly OT, and the label says so. The right answer names double OT as the omission." },
+        { "value": "c", "label": "PTO and holiday hours, because those never count toward the overtime threshold under any configuration.", "whyWrong": "PTO and holiday hours are not what the spec leaves out of this column; double OT is. The right answer names the real omission." },
+        { "value": "d", "label": "Pay amounts. The column is a dollar figure derived from the pay rate rather than a count of hours.", "whyWrong": "The column counts hours, not dollars. The right answer keeps it an hours sum and names double OT as left out." }
       ],
       "answer": "a",
       "why": "D3 is explicit: double OT is out because the product computes it nowhere (a literal zero, per PAS-5066), and the derived measure's label says exactly what is summed so nobody mistakes it for the payroll file's Total OT.",

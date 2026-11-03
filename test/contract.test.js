@@ -230,7 +230,7 @@ test('accepts a quiz question and normalises correct/answer/disagree', () => {
       answer: 'a',
       why: 'Because the spec says so',
       cite: 'Section 2.1',
-      options: [{ value: 'a', label: 'A' }, { value: 'b', label: 'B' }],
+      options: [{ value: 'a', label: 'A' }, { value: 'b', label: 'B', whyWrong: 'B contradicts section 2.1' }],
     }],
   };
   validatePayload(quizPayload);
@@ -265,4 +265,37 @@ test('parses --presence and --ignore-presence, and rejects --presence with a lau
   assert.deepEqual(parseArguments(['--json', '{}', '--ignore-presence']), { ...defaultParsedArguments, json: '{}', ignorePresence: true });
   assert.throws(() => parseArguments(['--presence', '--json', '{}']), ContractError);
   assert.throws(() => parseArguments(['--presence', '--open']), ContractError);
+});
+
+const wwPayload = (options, answer = 'a') => ({
+  version: 1,
+  questions: [{ id: 'quiz-1', prompt: 'Pick', type: 'quiz', answer, options }],
+});
+
+test('accepts a quiz whose wrong options all carry whyWrong and records the chosen option', () => {
+  const payload = wwPayload([{ value: 'a', label: 'A' }, { value: 'b', label: 'B', whyWrong: 'B ignores the cap.' }]);
+  validatePayload(payload);
+  const wrong = validateAnswers(payload, [{ questionId: 'quiz-1', value: 'b', notes: '', disagree: false }]);
+  assert.equal(wrong['quiz-1'].value, 'b');
+  assert.equal(wrong['quiz-1'].correct, false);
+  const right = validateAnswers(payload, [{ questionId: 'quiz-1', value: 'a', notes: '', disagree: false }]);
+  assert.equal(right['quiz-1'].value, 'a');
+  assert.equal(right['quiz-1'].correct, true);
+});
+
+test('rejects a quiz wrong option without whyWrong, saying this is what makes the quiz teach', () => {
+  const payload = wwPayload([{ value: 'a', label: 'A' }, { value: 'b', label: 'B' }, { value: 'c', label: 'C', whyWrong: '  ' }]);
+  assert.throws(() => validatePayload(payload), (error) => {
+    assert.ok(error instanceof ContractError);
+    const text = JSON.stringify(error.issues);
+    assert.match(text, /options\[1\]\.whyWrong/);
+    assert.match(text, /options\[2\]\.whyWrong/);
+    assert.match(text, /This is what makes the quiz teach/);
+    return true;
+  });
+});
+
+test('rejects whyWrong on the answer option and on non-quiz options', () => {
+  assert.throws(() => validatePayload(wwPayload([{ value: 'a', label: 'A', whyWrong: 'x' }, { value: 'b', label: 'B', whyWrong: 'y' }])), ContractError);
+  assert.throws(() => validatePayload({ version: 1, questions: [{ id: 's', prompt: 'P', type: 'single', options: [{ value: 'a', label: 'A', whyWrong: 'x' }] }] }), ContractError);
 });
