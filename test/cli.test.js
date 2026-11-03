@@ -78,6 +78,8 @@ test('help is a self-sufficient agent contract', async () => {
       '"message": "optional non-empty Markdown string"',
       '"type": "single" | "multiple" | "text" | "quiz"',
       '"allowOther": true | false,                // optional; single/multiple only; defaults to true. Set false to turn Other off. Invalid on quiz.',
+      '"whyWrong": "string"',
+      'REQUIRED on every option that is not the answer',
       '"answer": "option value",                 // quiz only; required; must equal one of this question\'s option values',
       '"score":{"right":N,"wrong":N,"disagree":N,"total":N}',
       'Single and multiple-choice questions show an Other free-text option by default.',
@@ -614,6 +616,13 @@ test('interface source keeps rail navigation, safe review rendering, and Other i
   assert.match(app, /quizState\.set\(question\.id/);
   assert.match(app, /I disagree with the spec here/);
   assert.match(app, /function renderQuizScore\(/);
+  assert.match(app, /every\(\(question\) => question\.type === 'quiz'\)\) document\.body\.classList\.add\('quiz-mode'\)/);
+  const css = await readFile(new URL('../web/style.css', import.meta.url), 'utf8');
+  assert.match(css, /body\.quiz-mode \.app-header/);
+  assert.match(css, /@media \(prefers-color-scheme: dark\) \{\s*body\.quiz-mode/);
+  assert.match(css, /body\.quiz-mode \.quiz-why-wrong/);
+  assert.match(app, /Why your choice was wrong: \$\{chosenOption\.whyWrong\}/);
+  assert.match(app, /is wrong: \$\{option\.whyWrong\}/);
   assert.match(app, /correct: value === question\.answer, answer: question\.answer, disagree: disagree \?\? false/);
 
   // Quiz log: every reveal (initial answer and disagree toggle) is also

@@ -121,6 +121,27 @@ flowchart LR
 - **Inline SVG.** An `svg` fenced block is sanitised on the server (scripts, event handlers, `foreignObject`, `style`, animation and external references are removed; only references to `#ids` inside the same SVG survive) and drawn as an image, using `sanitize-html`.
 - **Image files.** `![alt](relative/path.png)` resolves against the payload file's directory for `--file`, or the current directory for `--json`/stdin, like document paths. Only png, jpg, jpeg, gif, webp and svg files are served, only the ones the payload references, and only from inside that directory. A path that leaves it (`..` or a symbolic link), a missing file, or another file type stops the launch with an error. Remote `http(s)` images are left as written.
 
+## Quiz questions
+
+A `"type": "quiz"` question checks understanding. It takes `options`, an `"answer"` (one option value), and optional `"why"`, `"cite"` and `"allowDisagree"`.
+
+Every option that is not the answer must carry `"whyWrong"`: a sentence on why that choice is wrong compared with the right one. The answer option must not carry it. The payload is refused otherwise, because `whyWrong` is what makes the quiz teach instead of only scoring. The field is camelCase, like `allowDisagree`.
+
+```json
+{
+  "id": "range-cap", "type": "quiz", "prompt": "A range is exactly 366 days. What happens?",
+  "options": [
+    { "value": "a", "label": "Refused server-side.", "whyWrong": "The cap is 366, and both sides share one predicate, so 366 passes." },
+    { "value": "b", "label": "Accepted on both sides." }
+  ],
+  "answer": "b",
+  "why": "One shared constant caps both sides at 366.",
+  "cite": "REPORTS-RANGE-SPEC.md, D1"
+}
+```
+
+After the person picks an option, the form shows the verdict. A wrong pick shows that option's `whyWrong` first, then the `why` and `cite` for the right answer. The review screen lists the `whyWrong` of every wrong option for each question that was missed or disagreed with, and the copied quiz summary carries the same lines. The saved answer for each quiz question records `value` (the option chosen), `correct` (true or false), `answer` and `disagree`. See `examples/quiz.json`.
+
 ## Durable answers
 
 Every submitted result is also written to its own file, so a caller's own stdout redirect is never the only copy of an answer. On submit, before printing to stdout, the command writes the full result to `~/.ask-questions/answers/<timestamp>-<answersId>.json`, atomically (a temp file written first, then renamed into place). The result's `answersId` and `answersFile` fields, and a matching line on stderr, all point at the same file. Cancelled sessions are not saved.

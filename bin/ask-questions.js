@@ -131,12 +131,13 @@ Payload schema (version must be 1):
         "options": [{                              // required for single, multiple, and quiz
           "value": "unique non-empty string",
           "label": "non-empty string",
-          "description": "optional string"
+          "description": "optional string",
+          "whyWrong": "string"                     // quiz only; REQUIRED on every option that is not the answer: why this choice is wrong compared with the right one. Forbidden on the answer option. This is what makes the quiz teach.
         }],
         "allowOther": true | false,                // optional; single/multiple only; defaults to true. Set false to turn Other off. Invalid on quiz.
         "placeholder": "optional string",         // optional; text and Other inputs
         "answer": "option value",                 // quiz only; required; must equal one of this question's option values
-        "why": "optional string",                 // quiz only; shown after the person answers
+        "why": "optional string",                 // quiz only; shown after the person answers (why the answer is right). A wrong pick also sees that option's whyWrong first
         "cite": "optional string",                // quiz only; shown after the person answers, as the spec sentence the answer rests on
         "allowDisagree": true | false             // quiz only; optional, defaults to true; shows an "I disagree with the spec here" toggle
       }

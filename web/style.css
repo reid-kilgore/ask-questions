@@ -190,6 +190,7 @@ button.primary { background: #276755; color: #fff; }
 .quiz-verdict { margin: 0 0 6px; font-weight: 700; }
 .quiz-verdict.correct { color: #1e6652; }
 .quiz-verdict.incorrect { color: #9d3d2d; }
+.quiz-why-wrong { margin: 6px 0; padding-left: 10px; border-left: 3px solid #d9604a; color: #7a3326; }
 .quiz-why { margin: 6px 0; color: #3a4844; }
 .quiz-cite { margin: 6px 0 0; padding-left: 10px; border-left: 3px solid #b8d8c9; color: #53625d; font-size: .88rem; font-style: italic; }
 .quiz-disagree-toggle { margin-top: 12px; background: #e8eeeb; color: #263630; font-size: .85rem; }
@@ -258,3 +259,68 @@ button.primary { background: #276755; color: #fff; }
 .diagram-source-hidden { display: none; }
 pre[data-diagram-state="failed"]::before { content: "Diagram could not be drawn. Source:"; display: block; margin-bottom: 6px; font: 600 .8rem sans-serif; color: #8a4b00; }
 .message img, .documents-pane img { max-width: 100%; height: auto; border-radius: 4px; }
+
+/* --- Quiz colour scheme --------------------------------------------------- */
+/* Applied by app.js (body.quiz-mode) only when every question is a quiz, so a quiz never looks like
+   a decision form. Light by default; the dark variant follows the system setting. Right (green) and
+   wrong (red) keep their meaning inside the scheme, and the whyWrong text has its own readable colour. */
+body.quiz-mode {
+  --q-bg: #f3f0ff; --q-card: #fff; --q-text: #1d1838; --q-muted: #4a4470; --q-border: #cfc6f5;
+  --q-accent: #5b46c8; --q-accent-text: #fff; --q-band: #4b3bb0; --q-band-text: #fff; --q-rail: #241c55;
+  --q-soft: #ece8ff; --q-reveal: #ece8ff;
+  --q-ok-bg: #e3f6ec; --q-ok-border: #2f9e6e; --q-ok-text: #145a3e;
+  --q-bad-bg: #fde8e4; --q-bad-border: #d9604a; --q-bad-text: #7a2a1d;
+  background: var(--q-bg); color: var(--q-text);
+}
+@media (prefers-color-scheme: dark) {
+  body.quiz-mode {
+    color-scheme: dark;
+    --q-bg: #151228; --q-card: #211c3f; --q-text: #ece9ff; --q-muted: #b9b2e6; --q-border: #3c3470;
+    --q-accent: #8d7bff; --q-accent-text: #120d33; --q-band: #2c2370; --q-band-text: #f1eeff; --q-rail: #0f0c20;
+    --q-soft: #2c2650; --q-reveal: #2c2650;
+    --q-ok-bg: #12372b; --q-ok-border: #4cc79a; --q-ok-text: #bff0dc;
+    --q-bad-bg: #44201c; --q-bad-border: #ff8a76; --q-bad-text: #ffd0c7;
+  }
+}
+body.quiz-mode .rail, body.quiz-mode .rail:hover .rail-items, body.quiz-mode .rail.pinned .rail-items, body.quiz-mode .rail-legend { background: var(--q-rail); }
+body.quiz-mode .app-header { background: var(--q-band); border-bottom-color: var(--q-accent); color: var(--q-band-text); }
+body.quiz-mode .app-title::before { content: "QUIZ"; margin-right: 10px; padding: 3px 8px; border-radius: 5px; background: var(--q-accent); color: var(--q-accent-text); font-size: .72rem; font-weight: 800; letter-spacing: .1em; vertical-align: middle; }
+body.quiz-mode .asker-path, body.quiz-mode .asker-tmux-window, body.quiz-mode .icon-button, body.quiz-mode .annotation-panel-toggle { background: rgb(255 255 255 / 16%); color: var(--q-band-text); }
+body.quiz-mode .question-card, body.quiz-mode .review-card { background: var(--q-card); border-color: var(--q-border); border-left: 5px solid var(--q-accent); }
+body.quiz-mode .eyebrow, body.quiz-mode .review-item h3 { color: var(--q-accent); }
+body.quiz-mode .message, body.quiz-mode .notes-label, body.quiz-mode .review-message, body.quiz-mode .review-label, body.quiz-mode .optional, body.quiz-mode .copy-status { color: var(--q-muted); }
+body.quiz-mode .message a { color: var(--q-accent); }
+body.quiz-mode .message pre, body.quiz-mode .quiz-score, body.quiz-mode .annotation-text { background: var(--q-soft); }
+body.quiz-mode .review-item { border-top-color: var(--q-border); }
+body.quiz-mode textarea { background: var(--q-card); border-color: var(--q-border); color: var(--q-text); }
+body.quiz-mode textarea:focus { border-color: var(--q-accent); outline-color: var(--q-border); }
+body.quiz-mode .quiz-option { background: var(--q-card); border-color: var(--q-border); color: var(--q-text); }
+body.quiz-mode .quiz-option:hover:not(:disabled) { border-color: var(--q-accent); background: var(--q-soft); }
+body.quiz-mode .quiz-option small { color: var(--q-muted); }
+body.quiz-mode .quiz-option.correct { border-color: var(--q-ok-border); background: var(--q-ok-bg); color: var(--q-ok-text); }
+body.quiz-mode .quiz-option.chosen-wrong { border-color: var(--q-bad-border); background: var(--q-bad-bg); color: var(--q-bad-text); }
+body.quiz-mode .quiz-reveal { background: var(--q-reveal); }
+body.quiz-mode .quiz-verdict.correct { color: var(--q-ok-text); }
+body.quiz-mode .quiz-verdict.incorrect { color: var(--q-bad-text); }
+body.quiz-mode .quiz-why-wrong { border-left-color: var(--q-bad-border); background: var(--q-bad-bg); color: var(--q-bad-text); padding: 8px 10px; border-radius: 0 6px 6px 0; }
+body.quiz-mode .quiz-why { color: var(--q-text); }
+body.quiz-mode .quiz-cite { border-left-color: var(--q-accent); color: var(--q-muted); }
+body.quiz-mode button.primary, body.quiz-mode .actions [type="submit"], body.quiz-mode #next-question { background: var(--q-accent); color: var(--q-accent-text); }
+body.quiz-mode button.secondary, body.quiz-mode .quiz-disagree-toggle { background: var(--q-soft); color: var(--q-text); }
+body.quiz-mode .quiz-disagree-toggle.active { background: #d99e2a; color: #2b2007; }
+body.quiz-mode button:focus-visible { outline-color: var(--q-accent); }
+body.quiz-mode .documents-pane { background: var(--q-card); border-left-color: var(--q-border); color: var(--q-text); }
+body.quiz-mode .quiz-log { border-bottom-color: var(--q-border); }
+body.quiz-mode .quiz-log-title { color: var(--q-accent); }
+body.quiz-mode .quiz-log-entry { background: var(--q-soft); }
+body.quiz-mode .quiz-log-heading { color: var(--q-text); }
+body.quiz-mode .quiz-log-answer, body.quiz-mode .document-content { color: var(--q-text); }
+body.quiz-mode .quiz-log-disagree { color: #d99e2a; }
+body.quiz-mode .document-list button { background: var(--q-soft); color: var(--q-text); }
+body.quiz-mode .document-list button.active { background: var(--q-accent); color: var(--q-accent-text); }
+body.quiz-mode .document-content a { color: var(--q-accent); }
+body.quiz-mode .document-content pre { background: var(--q-soft); }
+body.quiz-mode .document-content table { background: none; }
+body.quiz-mode .document-content th, body.quiz-mode .document-content td { border-color: var(--q-border); }
+body.quiz-mode .document-content th { background: var(--q-soft); color: var(--q-text); }
+body.quiz-mode .required { color: var(--q-bad-text); }
