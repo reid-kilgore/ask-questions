@@ -48,3 +48,11 @@ test('hover tints apply only where the device can hover', () => {
   const loose = css.split('\n').filter((line) => /:hover/.test(line) && !/\.rail:hover/.test(line) && !line.startsWith('@media (hover: hover)'));
   assert.deepEqual(loose, []);
 });
+
+test('the review screen has an optional final thoughts box that is sent with the answers and not re-rendered away', async () => {
+  const html = await readFile(new URL('../web/index.html', import.meta.url), 'utf8');
+  // The box sits beside the summary, not inside it, so renderReview (which clears the summary) never wipes what was typed.
+  assert.match(html, /<div id="review-summary"><\/div>\s*<label class="final-thoughts" for="final-thoughts">[\s\S]*?<textarea id="final-thoughts"/);
+  assert.match(app, /JSON\.stringify\(\{ answers, annotations: buildAnnotationsPayload\(\), \.\.\.finalThoughtsPayload\(\) \}\)/);
+  assert.match(app, /\.\.\.finalThoughtsPayload\(\),\n\s+submittedAt/);
+});

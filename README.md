@@ -66,6 +66,8 @@ Annotating is entirely optional. It's never required to submit, and it never cha
 
 ### What the calling agent gets back
 
+The last screen before Submit has an optional **Final thoughts** box for anything that does not belong to one question. When the person types something, the result carries it as a top-level string `finalThoughts` (trimmed, at most 10,000 characters), beside `answers` and `annotations`. When the box is left empty the field is absent, so results without it keep their old shape: `{"answers": {...}, "annotations": {...}, "finalThoughts": "Looks right, but ship the migration first."}`.
+
 Alongside `answers`, the result carries a top-level `annotations` object — always present, defaulting to `{}` when nothing was annotated or the request was cancelled. Every leaf is the original text with the highlighted part wrapped in [CriticMarkup](http://criticmarkup.com/) and the comment attached right there, so the calling agent always sees the comment together with exactly what it's about:
 
 ```json

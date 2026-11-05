@@ -8,7 +8,7 @@ import { homedir } from 'node:os';
 import { randomBytes } from 'node:crypto';
 import { execFile, execFileSync, spawn } from 'node:child_process';
 import MarkdownIt from 'markdown-it';
-import { ContractError, parseArguments, resolveDocumentPath, validateAnnotations, validateAnswers, validatePayload } from '../lib/contract.js';
+import { ContractError, parseArguments, resolveDocumentPath, validateAnnotations, validateAnswers, validateFinalThoughts, validatePayload } from '../lib/contract.js';
 import { installBlockAnchors } from '../lib/blockAnchor.js';
 import { createImageRegistry, installDiagramFences, localizeImages } from '../lib/pictures.js';
 import { readPresence, refusalMessage } from '../lib/presence.js';
@@ -198,12 +198,16 @@ Lifecycle and output:
   Calling agents must disable their execution timeout or set it to several hours.
   Normal waiting is not a failure. After HTTP 200, the page shows a clear
   submitted or cancelled state and tries to close its tab. stdout contains exactly one JSON value:
-  submitted: {"version":1,"status":"submitted","askerPath":"/absolute/path","answers":{"question-id":{"value":"...","notes":"..."}},"annotations":{...},"submittedAt":"ISO-8601","answersId":"...","answersFile":"/absolute/path/to/saved/answers.json"}
+  submitted: {"version":1,"status":"submitted","askerPath":"/absolute/path","answers":{"question-id":{"value":"...","notes":"..."}},"annotations":{...},"finalThoughts":"optional, only when typed","submittedAt":"ISO-8601","answersId":"...","answersFile":"/absolute/path/to/saved/answers.json"}
   cancelled: {"version":1,"status":"cancelled","askerPath":"/absolute/path","answers":{},"annotations":{}}
   Multiple-choice values are arrays of strings. Single-choice and text values are normal
   values (a single optional choice can be null). Submitted answers are keyed by question id and
   contain value and notes only. Every submitted answer must include a notes string. The Notes
   field in the user interface is optional and sends an empty string when blank.
+  finalThoughts: the last screen before Submit has an optional "Final thoughts" box for anything
+  that does not belong to one question. The result carries it as a top-level string, beside
+  answers, only when the person typed something (trimmed, at most 10000 characters); when it is
+  absent there was nothing to say. It never changes the shape of answers or annotations.
   Quiz questions are the one exception: their answer entry is
   {"value":"...","notes":"...","correct":true|false,"answer":"...","disagree":true|false} --
   value is the chosen option's value (or null), correct compares it to the question's own
@@ -674,6 +678,7 @@ async function serve(payload, documents, messageHtml, messageBlockText, anchors,
         const body = await requestBody(request);
         const answers = validateAnswers(payload, body.answers);
         const annotations = validateAnnotations(payload, anchors, body.annotations);
+        const finalThoughts = validateFinalThoughts(body.finalThoughts);
         const quizAnswers = payload.questions
           .filter((question) => question.type === 'quiz')
           .map((question) => answers[question.id]);
@@ -685,7 +690,7 @@ async function serve(payload, documents, messageHtml, messageBlockText, anchors,
             total: quizAnswers.length,
           }
           : undefined;
-        const submitted = { version: 1, status: 'submitted', ...metadata, answers, annotations, ...(score ? { score } : {}), submittedAt: new Date().toISOString() };
+        const submitted = { version: 1, status: 'submitted', ...metadata, answers, annotations, ...(finalThoughts ? { finalThoughts } : {}), ...(score ? { score } : {}), submittedAt: new Date().toISOString() };
         const saved = await saveAnswers(submitted);
         process.stderr.write(`ask-questions: saved answers to ${saved.answersFile}\n`);
         send(response, 200, 'application/json; charset=utf-8', JSON.stringify({ ok: true }));
