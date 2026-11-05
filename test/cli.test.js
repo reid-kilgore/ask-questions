@@ -255,6 +255,28 @@ test('no-browser session submits annotations alongside answers, anchored to the 
   }
 });
 
+test('no-browser session returns final thoughts as a top-level field, and omits it when none were typed', async () => {
+  const input = JSON.stringify({ version: 1, questions: [{ id: 'go', prompt: 'Continue?', type: 'text' }] });
+  for (const [sent, expected] of [['  Ship the migration first.  ', 'Ship the migration first.'], ['', undefined]]) {
+    const session = startCli(['--no-open', '--no-ding'], input);
+    try {
+      const url = await waitForUrl(session);
+      const response = await fetch(`${url}api/submit`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ answers: [{ questionId: 'go', value: 'yes', notes: '' }], ...(sent ? { finalThoughts: sent } : {}) }),
+      });
+      assert.equal(response.status, 200);
+      await session.closed;
+      const result = JSON.parse(session.output().stdout);
+      assert.equal(result.finalThoughts, expected);
+      assert.equal('finalThoughts' in result, expected !== undefined);
+    } finally {
+      await stopChild(session);
+    }
+  }
+});
+
 test('rejects a submitted annotation whose text was not the block\'s own original text', async () => {
   const input = JSON.stringify({ version: 1, message: 'A message.', questions: [{ id: 'go', prompt: 'Continue?', type: 'text' }] });
   const session = startCli(['--no-open', '--no-ding'], input);

@@ -34,6 +34,7 @@ const review = document.querySelector('#review');
 const reviewSummary = document.querySelector('#review-summary');
 const quizScoreEl = document.querySelector('#quiz-score');
 const summary = document.querySelector('#summary');
+const finalThoughtsField = document.querySelector('#final-thoughts');
 const submitButton = form.querySelector('[type="submit"]');
 const cancelButton = document.querySelector('#cancel');
 const copyJsonButton = document.querySelector('#copy-json');
@@ -440,6 +441,12 @@ function renderReview() {
   }
 }
 
+// Optional free text from the review screen. Sent only when it holds something, so a result without it keeps its old shape.
+function finalThoughtsPayload() {
+  const text = finalThoughtsField.value.trim();
+  return text ? { finalThoughts: text } : {};
+}
+
 function buildCopiedResult(answers) {
   return {
     version: 1,
@@ -452,6 +459,7 @@ function buildCopiedResult(answers) {
       return [questionId, { value, notes }];
     })),
     annotations: buildAnnotationsPayload(),
+    ...finalThoughtsPayload(),
     submittedAt: new Date().toISOString(),
   };
 }
@@ -902,7 +910,7 @@ form.addEventListener('submit', async (event) => {
   await completeRequest('api/submit', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ answers, annotations: buildAnnotationsPayload() }),
+    body: JSON.stringify({ answers, annotations: buildAnnotationsPayload(), ...finalThoughtsPayload() }),
   }, 'submit', 'Answers submitted. The agent can continue.');
 });
 

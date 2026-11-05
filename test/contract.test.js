@@ -3,7 +3,7 @@ import { mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { ContractError, parseArguments, resolveDocumentPath, validateAnnotations, validateAnswers, validatePayload } from '../lib/contract.js';
+import { ContractError, parseArguments, resolveDocumentPath, validateAnnotations, validateAnswers, validateFinalThoughts, validatePayload } from '../lib/contract.js';
 
 const payload = { version: 1, questions: [{ id: 'choice', prompt: 'Choose', type: 'single', required: true, options: [{ value: 'yes', label: 'Yes' }] }, { id: 'text', prompt: 'Explain', type: 'text' }] };
 
@@ -298,4 +298,13 @@ test('rejects a quiz wrong option without whyWrong, saying this is what makes th
 test('rejects whyWrong on the answer option and on non-quiz options', () => {
   assert.throws(() => validatePayload(wwPayload([{ value: 'a', label: 'A', whyWrong: 'x' }, { value: 'b', label: 'B', whyWrong: 'y' }])), ContractError);
   assert.throws(() => validatePayload({ version: 1, questions: [{ id: 's', prompt: 'P', type: 'single', options: [{ value: 'a', label: 'A', whyWrong: 'x' }] }] }), ContractError);
+});
+
+test('final thoughts are optional, trimmed, a string, and at most 10000 characters', () => {
+  assert.equal(validateFinalThoughts(undefined), '');
+  assert.equal(validateFinalThoughts('   '), '');
+  assert.equal(validateFinalThoughts('  ship it \n'), 'ship it');
+  assert.throws(() => validateFinalThoughts(5), ContractError);
+  assert.throws(() => validateFinalThoughts('x'.repeat(10001)), ContractError);
+  assert.equal(validateFinalThoughts('x'.repeat(10000)).length, 10000);
 });
