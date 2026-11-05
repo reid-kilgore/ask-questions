@@ -146,13 +146,22 @@ function addOtherOption(card, question, questionIndex) {
 
 // --- Quiz question type ---------------------------------------------------
 
+// An option label often ends in a full stop already; the reveal adds its own, so drop one first.
+function stripFinalPeriod(text) {
+  return String(text).replace(/\.+\s*$/, '');
+}
+
+// Phones get the compact review: one short row per question, detail folded away. Desktop keeps
+// everything open, as before. Read once per render; it only picks the initial open state.
+const narrowScreen = window.matchMedia('(max-width: 800px)');
+
 function renderQuizReveal(question, reveal, notesTextarea, questionIndex) {
   reveal.replaceChildren();
   reveal.hidden = false;
   const state = quizState.get(question.id);
   const correctOption = question.options.find((option) => option.value === question.answer);
   const verdict = create('p', { className: `quiz-verdict ${state.correct ? 'correct' : 'incorrect'}` });
-  verdict.textContent = state.correct ? 'Correct.' : `Not quite — the spec says: ${correctOption?.label ?? question.answer}.`;
+  verdict.textContent = state.correct ? 'Correct.' : `Not quite — the spec says: ${stripFinalPeriod(correctOption?.label ?? question.answer)}.`;
   reveal.append(verdict);
   const chosenOption = question.options.find((option) => option.value === state.value);
   if (!state.correct && chosenOption?.whyWrong) {
@@ -348,11 +357,15 @@ function renderQuizScore(answers) {
   quizScoreEl.replaceChildren();
   const { quizAnswers, right, wrong, disagree, total } = quizScoreData(answers);
   quizScoreEl.append(create('p', { className: 'quiz-score-line', textContent: `Quiz score: ${right}/${total} correct, ${wrong} wrong, ${disagree} disagreed` }));
+  // Everything below the score line sits in a fold: open on desktop, closed on a phone.
+  const detail = create('details', { className: 'quiz-score-detail', open: !narrowScreen.matches });
+  detail.append(create('summary', { textContent: 'Explanations and summary text' }));
+  quizScoreEl.append(detail);
   const lines = [`Quiz results — ${right}/${total} correct, ${wrong} wrong, ${disagree} disagreed`, ''];
   const problems = quizAnswers.filter((item) => !item.correct || item.disagree);
   if (problems.length === 0) {
     const okLine = 'Everything matched the spec and nothing was disagreed with.';
-    quizScoreEl.append(create('p', { textContent: okLine }));
+    detail.append(create('p', { textContent: okLine }));
     lines.push(okLine);
   } else {
     problems.forEach(({ question, value, correct, disagree: disagreed, notes }) => {
@@ -366,7 +379,7 @@ function renderQuizScore(answers) {
       const wrongLines = wrongOptions.map((option) => `Why "${option.label}" is wrong: ${option.whyWrong}`);
       wrongLines.forEach((line) => block.append(create('p', { className: 'quiz-why-wrong', textContent: line })));
       if (notes) block.append(create('p', { textContent: `Note: ${notes}` }));
-      quizScoreEl.append(block);
+      detail.append(block);
       lines.push(question.prompt, summaryLine, ...wrongLines);
       if (notes) lines.push(`Note: ${notes}`);
       lines.push('');
@@ -379,7 +392,7 @@ function renderQuizScore(answers) {
     rows: Math.min(18, lines.length + 2),
     value: lastQuizSummaryText,
   });
-  quizScoreEl.append(textBlock);
+  detail.append(textBlock);
 }
 
 function renderReview() {
@@ -391,13 +404,26 @@ function renderReview() {
   session.questions.forEach((question, index) => {
     const answer = answersByQuestionId.get(question.id);
     const item = create('article', { className: 'review-item' });
-    item.append(create('h3', { textContent: `Question ${index + 1}` }));
-    item.append(create('p', { className: 'review-prompt', textContent: question.prompt }));
+    // On a phone a quiz question is one row (number plus right or wrong) that opens for the detail.
+    const fold = question.type === 'quiz' ? create('details', { className: 'review-fold', open: !narrowScreen.matches }) : null;
+    if (fold) {
+      const state = quizState.get(question.id);
+      const verdict = state?.correct ? 'Right' : 'Wrong';
+      const row = create('summary');
+      row.append(create('span', { className: 'review-row-title', textContent: `Question ${index + 1}` }));
+      row.append(create('span', { className: `review-row-verdict ${state?.correct ? 'correct' : 'incorrect'}`, textContent: state?.disagree ? `${verdict}, disagreed` : verdict }));
+      fold.append(row);
+      item.append(fold);
+    }
+    const body = fold ?? item;
+    if (!fold) item.append(create('h3', { textContent: `Question ${index + 1}` }));
+    else body.append(create('h3', { className: 'review-fold-heading', textContent: `Question ${index + 1}` }));
+    body.append(create('p', { className: 'review-prompt', textContent: question.prompt }));
     const answerLabel = create('p', { className: 'review-label', textContent: 'Answer' });
     const answerValue = create('p', { className: 'review-value', textContent: displayAnswer(question, answer) });
     const notesLabel = create('p', { className: 'review-label', textContent: 'Notes' });
     const notesValue = create('p', { className: 'review-value', textContent: answer.notes || 'No notes' });
-    item.append(answerLabel, answerValue, notesLabel, notesValue);
+    body.append(answerLabel, answerValue, notesLabel, notesValue);
     reviewSummary.append(item);
   });
   const annotations = annotationEntries();
@@ -741,9 +767,11 @@ function recordQuizAnswer(question, questionIndex, state) {
   // Open the sidebar the first time any quiz answer lands, even if the
   // payload carries no real documents — see the "hasAnything" gate in
   // renderDocumentsPane below, which shows the pane for the quiz log alone.
+  // Not on a phone: the pane is stacked under the question there, so opening it pushes the
+  // buttons off the screen. The person can still open it with the toggle.
   if (!quizSidebarOpened) {
     quizSidebarOpened = true;
-    docPaneOpen = true;
+    if (window.innerWidth > 800) docPaneOpen = true;
   }
   renderDocumentsPane();
 }
@@ -762,7 +790,7 @@ function renderQuizLog() {
     item.append(create('p', { className: 'quiz-log-answer', textContent: `Your answer: ${entry.optionLabel}` }));
     item.append(create('p', {
       className: `quiz-verdict ${entry.correct ? 'correct' : 'incorrect'}`,
-      textContent: entry.correct ? 'Correct.' : `Not quite — the spec says: ${entry.correctLabel}.`,
+      textContent: entry.correct ? 'Correct.' : `Not quite — the spec says: ${stripFinalPeriod(entry.correctLabel)}.`,
     }));
     if (entry.whyWrong) item.append(create('p', { className: 'quiz-why-wrong', textContent: `Why your choice was wrong: ${entry.whyWrong}` }));
     if (entry.why) item.append(create('p', { className: 'quiz-why', textContent: entry.why }));
