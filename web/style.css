@@ -76,6 +76,13 @@ textarea:focus, .other-value:focus { border-color: #4d7b6e; outline: 3px solid #
 .actions { display: grid; grid-template-columns: 1fr auto auto auto auto; align-items: center; gap: 10px; min-height: 44px; margin: 28px 0; }
 .actions #previous-question { grid-column: 1; justify-self: start; }
 .actions #cancel { grid-column: 2; }
+.cancel-confirm { grid-column: 1 / -1; display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 8px 10px; padding: 12px; border: 1px solid #e0b4a9; border-radius: 7px; background: #fff2ee; color: #6f291e; }
+.cancel-confirm[hidden] { display: none; }
+.cancel-confirm p { margin: 0; }
+.cancel-confirm-title { flex: 1 1 100%; font-weight: 650; }
+.cancel-confirm-detail { flex: 1 1 auto; font-size: .9rem; }
+.actions.confirming > :not(.cancel-confirm) { display: none; }
+button.danger { background: #a63d2a; }
 .actions #copy-quiz-summary { grid-column: 3; }
 .actions #copy-json { grid-column: 4; }
 .actions #next-question, .actions [type="submit"] { grid-column: 5; }
@@ -294,6 +301,8 @@ button.primary { background: #276755; color: #fff; }
   .actions #previous-question { grid-column: 1; grid-row: 1; justify-self: stretch; }
   .actions #next-question, .actions [type="submit"] { grid-column: 2; grid-row: 1; }
   .actions #next-question, .actions [type="submit"] { font-size: 1.05rem; }
+  /* Confirm cancel above, Keep answering full width on the bottom row where Cancel was. */
+  .cancel-confirm button { flex: 1 1 100%; }
   .actions #cancel { grid-column: 1 / -1; grid-row: 2; margin-top: 10px; background: transparent; color: #53625d; font-weight: 500; }
   body.quiz-mode .actions { background: var(--q-bg, #f4f6f5); }
 }
