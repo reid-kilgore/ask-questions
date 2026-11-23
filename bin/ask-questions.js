@@ -370,11 +370,11 @@ async function readPayload(args) {
     return { html, blockText: env.blockText };
   };
   const documents = await Promise.all((payload.documents ?? []).map(async (document) => {
-    if (document.markdown !== undefined) return { id: document.id, title: document.title, ...(await renderMarkdown(document.markdown)) };
+    if (document.markdown !== undefined) return { id: document.id, title: document.title, ...(document.optIn ? { optIn: true } : {}), ...(await renderMarkdown(document.markdown)) };
     const documentPath = await resolveDocumentPath(baseDirectory, document.path);
     let sourceMarkdown;
     try { sourceMarkdown = await readFile(documentPath, 'utf8'); } catch (error) { throw new ContractError(`Cannot read document ${document.path}: ${error.message}`); }
-    return { id: document.id, title: document.title, ...(await renderMarkdown(sourceMarkdown)) };
+    return { id: document.id, title: document.title, ...(document.optIn ? { optIn: true } : {}), ...(await renderMarkdown(sourceMarkdown)) };
   }));
   const message = payload.message ? await renderMarkdown(payload.message) : undefined;
   const anchors = {

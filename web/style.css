@@ -132,6 +132,7 @@ button.primary { background: #276755; color: #fff; }
 .document-content h1, .document-content h2, .document-content h3 { margin-top: 1.3em; font-size: 1.25rem; letter-spacing: -.02em; }
 .document-content pre { overflow-x: auto; padding: 12px; border-radius: 6px; background: #f0f3f1; }
 .document-content a { color: #1e6652; }
+.document-empty { color: #66756f; font-style: italic; }
 /* Tables scroll sideways instead of squeezing: the container's overflow-wrap: anywhere would otherwise
    shrink every cell's minimum width to one character and split words mid-letter. */
 .document-content table { display: block; max-width: 100%; overflow-x: auto; border-collapse: collapse; margin: 1em 0; font-size: .92rem; line-height: 1.45; overflow-wrap: normal;

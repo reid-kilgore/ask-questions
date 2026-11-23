@@ -216,6 +216,27 @@ test('no-browser session submits a JSON result', async () => {
   }
 });
 
+test('an optIn document reaches the form marked optIn, and the form never opens it by itself', async () => {
+  const input = JSON.stringify({
+    version: 1,
+    questions: [{ id: 'choice', prompt: 'Pick one', type: 'single', options: [{ value: 'a', label: 'A' }] }],
+    documents: [{ id: 'held', title: 'Held', markdown: 'Held back.', optIn: true }, { id: 'notes', title: 'Notes', markdown: 'Notes.' }],
+  });
+  const session = startCli(['--no-open', '--no-ding'], input);
+  try {
+    const url = await waitForUrl(session);
+    const sessionData = await fetch(`${url}api/session`).then((response) => response.json());
+    assert.equal(sessionData.documents[0].optIn, true);
+    assert.equal(sessionData.documents[1].optIn, undefined);
+  } finally {
+    await stopChild(session);
+  }
+  const app = await readFile(new URL('../web/app.js', import.meta.url), 'utf8');
+  assert.match(app, /session\.documents\.find\(\(item\) => !item\.optIn\)/);
+  assert.match(app, /tabs\.find\(\(tab\) => !tab\.optIn\)\?\.id \?\? null/);
+  assert.match(app, /Choose a tab to read it\./);
+});
+
 test('no-browser session submits annotations alongside answers, anchored to the server\'s own block text', async () => {
   const input = JSON.stringify({
     version: 1,
