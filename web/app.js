@@ -37,6 +37,9 @@ const summary = document.querySelector('#summary');
 const finalThoughtsField = document.querySelector('#final-thoughts');
 const submitButton = form.querySelector('[type="submit"]');
 const cancelButton = document.querySelector('#cancel');
+const cancelConfirm = document.querySelector('#cancel-confirm');
+const cancelKeepButton = document.querySelector('#cancel-confirm-keep');
+const cancelYesButton = document.querySelector('#cancel-confirm-yes');
 const copyJsonButton = document.querySelector('#copy-json');
 const copyQuizSummaryButton = document.querySelector('#copy-quiz-summary');
 const copyStatus = document.querySelector('#copy-status');
@@ -615,6 +618,7 @@ function updateView() {
 function goToScreen(index) {
   if (index < 0 || index >= screens.length) return;
   summary.hidden = true;
+  closeCancelConfirm(false);
   currentScreen = index;
   const descriptor = screens[index];
   seenScreens.add(descriptor.type === 'question' ? session.questions[descriptor.index].id : descriptor.type);
@@ -670,6 +674,7 @@ document.addEventListener('keydown', (event) => {
   if (event.metaKey || event.ctrlKey) {
     if (event.repeat) return;
     if (event.key === 'Enter') {
+      if (!cancelConfirm.hidden) return; // the cancel question is open: answer it first
       // Advertised everywhere (rail-legend: "Cmd/Ctrl+Enter Next/Submit")
       // as a global shortcut, so it deliberately is NOT guarded by
       // isTypingTarget — it works even from inside the notes/other/text-
@@ -936,8 +941,40 @@ copyQuizSummaryButton.addEventListener('click', async () => {
   }
 });
 
-cancelButton.addEventListener('click', async () => {
+// Cancel asks first. A stray tap on Cancel only opens an in-page question (never a native
+// dialog: browser automation blocks on those); only "Confirm cancel" sends the request.
+// Keeping the form touches nothing else, so every typed answer stays as it was.
+const CANCEL_CONFIRM_DELAY_MS = 600; // Confirm cancel stays disabled this long, so a double tap cannot reach it
+let cancelConfirmTimer;
+
+function openCancelConfirm() {
+  cancelConfirm.hidden = false;
+  cancelYesButton.disabled = true;
+  clearTimeout(cancelConfirmTimer);
+  cancelConfirmTimer = setTimeout(() => { cancelYesButton.disabled = false; }, CANCEL_CONFIRM_DELAY_MS);
+  cancelButton.ariaExpanded = 'true';
+  document.querySelector('.actions').classList.add('confirming');
+  cancelKeepButton.focus(); // the safe choice has focus, so a second stray Enter keeps the form
+}
+
+function closeCancelConfirm(restoreFocus) {
+  if (cancelConfirm.hidden) return;
+  clearTimeout(cancelConfirmTimer);
+  cancelConfirm.hidden = true;
+  cancelButton.ariaExpanded = 'false';
+  document.querySelector('.actions').classList.remove('confirming');
+  if (restoreFocus) cancelButton.focus();
+}
+
+cancelButton.addEventListener('click', openCancelConfirm);
+cancelKeepButton.addEventListener('click', () => closeCancelConfirm(true));
+cancelYesButton.addEventListener('click', async () => {
+  if (cancelConfirm.hidden || cancelYesButton.disabled) return;
+  closeCancelConfirm(false);
   await completeRequest('api/cancel', { method: 'POST' }, 'cancel', 'Cancelled. No answers were submitted.');
+});
+document.addEventListener('keydown', (event) => {
+  if (event.key === 'Escape') closeCancelConfirm(true);
 });
 
 // --- Comments panel -----------------------------

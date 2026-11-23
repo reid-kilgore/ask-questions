@@ -59,11 +59,17 @@
               </section>
               <footer class="actions">
                 <button type="button" id="previous-question" class="secondary" hidden>Previous</button>
-                <button type="button" id="cancel" class="secondary">Cancel</button>
+                <button type="button" id="cancel" class="secondary" aria-expanded="false" aria-controls="cancel-confirm">Cancel</button>
                 <button type="button" id="copy-quiz-summary" class="secondary" hidden>Copy quiz summary</button>
                 <button type="button" id="copy-json" class="secondary" hidden>Copy as JSON</button>
                 <button type="button" id="next-question" hidden>Next</button>
                 <button type="submit">Submit answers</button>
+                <div id="cancel-confirm" class="cancel-confirm" role="group" aria-labelledby="cancel-confirm-title" hidden>
+                  <p id="cancel-confirm-title" class="cancel-confirm-title">Discard your answers?</p>
+                  <p class="cancel-confirm-detail">Nothing will be sent to the agent.</p>
+                  <button type="button" id="cancel-confirm-yes" class="danger">Confirm cancel</button>
+                  <button type="button" id="cancel-confirm-keep" class="secondary">Keep answering</button>
+                </div>
               </footer>
             </form>
             <section id="completion" class="completion" role="status" aria-live="polite" hidden>
