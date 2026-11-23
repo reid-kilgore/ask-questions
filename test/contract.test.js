@@ -66,6 +66,13 @@ test('rejects invalid documents and lexical traversal', async () => {
   await assert.rejects(resolveDocumentPath('/tmp/base', '../outside.md'), ContractError);
 });
 
+test('accepts a boolean optIn on a document and rejects any other value', () => {
+  const withDoc = (document) => ({ version: 1, questions: payload.questions, documents: [document] });
+  assert.doesNotThrow(() => validatePayload(withDoc({ id: 'held', title: 'Held', markdown: 'x', optIn: true })));
+  assert.doesNotThrow(() => validatePayload(withDoc({ id: 'held', title: 'Held', markdown: 'x', optIn: false })));
+  assert.throws(() => validatePayload(withDoc({ id: 'held', title: 'Held', markdown: 'x', optIn: 'yes' })), ContractError);
+});
+
 test('rejects a document symlink that points outside the input directory', async () => {
   const baseDirectory = await mkdtemp(path.join(tmpdir(), 'ask-questions-base-'));
   const outsideDirectory = await mkdtemp(path.join(tmpdir(), 'ask-questions-outside-'));

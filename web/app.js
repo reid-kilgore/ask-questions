@@ -715,7 +715,8 @@ let docPaneWidth = Number(localStorage.getItem(paneWidthKey)) || 360;
 // there so it doesn't permanently eat ~45vh of a phone-sized screen. Still
 // user-togglable afterward via the existing #documents-toggle button.
 let docPaneOpen = window.innerWidth > 800;
-let activeDocTabId = hasContext ? 'context' : (session.documents[0]?.id ?? null);
+// An optIn document (askd's withheld recommendations) is never opened by the form itself: only a click opens it.
+let activeDocTabId = hasContext ? 'context' : (session.documents.find((item) => !item.optIn)?.id ?? null);
 // Whether the sidebar has already been auto-opened for a quiz reveal — only
 // the very first one does this (see recordQuizAnswer); after that the
 // person's own open/closed choice via #documents-toggle is left alone.
@@ -817,7 +818,7 @@ function renderDocumentsPane() {
   const onContextScreen = screens[currentScreen].type === 'context';
   const tabs = [
     ...(hasContext && !onContextScreen ? [{ id: 'context', title: 'Context' }] : []),
-    ...session.documents.map((documentItem) => ({ id: documentItem.id, title: documentItem.title })),
+    ...session.documents.map((documentItem) => ({ id: documentItem.id, title: documentItem.title, optIn: Boolean(documentItem.optIn) })),
   ];
   // The pane also needs to show when there are no real documents at all but
   // the quiz log has at least one entry — see recordQuizAnswer above.
@@ -836,13 +837,14 @@ function renderDocumentsPane() {
     selectDocument = () => {};
     return;
   }
-  if (!tabs.some((tab) => tab.id === activeDocTabId)) activeDocTabId = tabs[0].id;
+  if (!tabs.some((tab) => tab.id === activeDocTabId)) activeDocTabId = tabs.find((tab) => !tab.optIn)?.id ?? null;
   const navigation = create('nav', { className: 'document-list', ariaLabel: 'Documents' });
   const content = create('article', { id: 'document-content', className: 'document-content' });
   const buttons = new Map();
   const select = (id) => {
     activeDocTabId = id;
-    if (id === 'context') attachMessage(content, session.messageHtml, session.messageBlockText);
+    if (id === null) content.replaceChildren(create('p', { className: 'document-empty', textContent: 'Choose a tab to read it.' }));
+    else if (id === 'context') attachMessage(content, session.messageHtml, session.messageBlockText);
     else attachDocument(content, session.documents.find((item) => item.id === id));
     buttons.forEach((button, tabId) => button.classList.toggle('active', tabId === id));
     content.scrollTop = 0;
